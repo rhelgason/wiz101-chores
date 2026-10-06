@@ -1,28 +1,27 @@
 """Read the wizard and carry out one decision from `dayplan`.
 
-Dance games and a named reagent sweep actually run. Hatching, garden spells,
-fishing casts, and gold fights do not: those screens are not mapped, and a
-guessed click spends energy or gold on a failure. The decision is still made
-and logged, and the loop comes back to it.
+Dance, a reagent sweep, a garden visit, a fishing cast, one kiosk hatch, and
+one farm fight all run. A hatch click waits until the open page shows the
+perfect ghulture. A garden spell waits until the plant names the need. The
+barn shop is still not clicked.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 
 from loguru import logger
 
 from . import ui
 from .dayplan import FARMS, Decision, Snapshot, choose, fishing_quest, places_for, reagent_from_quest
+from .garden import garden_state, note_live
 from .petdance import load_pet, save_pet
 from .petplan import note_equipped
 
-GARDEN_FILE = Path("state") / "garden.json"
 REAGENT_REQUEST = Path("state") / "reagent.request"
 FISH_REQUEST = Path("state") / "fish.request"
-PAUSE_BETWEEN = 20.0  # seconds between tries that cannot click the screen yet
+PAUSE_BETWEEN = 20.0  # seconds before repeating a step that could not act
 
 
 def _read(path: Path) -> str | None:
@@ -31,24 +30,6 @@ def _read(path: Path) -> str | None:
     except OSError:
         return None
     return text or None
-
-
-def garden_state() -> dict:
-    """Rank, barn, and seeds. Missing file means a new gardener on boom shrooms."""
-    base = {
-        "rank": 1,
-        "red_barn": False,
-        "couch_potato_seeds": 0,
-        "boom_shroom_seeds": 0,
-        "plants_need_care": False,
-    }
-    try:
-        data = json.loads(GARDEN_FILE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return base
-    if isinstance(data, dict):
-        base.update({k: data[k] for k in base if k in data})
-    return base
 
 
 async def _stat(client, *names: str) -> int | None:
@@ -84,6 +65,10 @@ async def look(client, cfg, dancer) -> Snapshot:
     except Exception:
         pass
     asked = _read(REAGENT_REQUEST)
+    try:
+        await note_live(client)
+    except Exception as exc:
+        logger.debug(f"garden: live read failed ({exc})")
     pet = load_pet()
     updated = note_equipped(pet)
     if updated != pet:
@@ -137,48 +122,34 @@ async def carry_out(decision: Decision, client, dancer, gatherer) -> None:
         if not got:
             await asyncio.sleep(PAUSE_BETWEEN)
         return
+    acted = False
     if decision.action == "garden":
-        await _tend_from_home(client)
+        from .garden import tend
+
+        acted = await tend(client, dancer.controller, decision.why)
     elif decision.action == "fish":
-        logger.info(
-            "fishing: the quest is tracked, and the minigame is not mapped. "
-            "A cast would spend the energy and fail the reel, so none is cast"
-        )
+        from .fishing import fish_once
+
+        acted = await fish_once(client, dancer.controller) > 0
     elif decision.action == "hatch":
-        logger.info(f"hatch: {decision.why}. The hatch window is not mapped, so no gold is spent")
+        from .hatch import hatch_once
+
+        result = await hatch_once(client, dancer, dancer.controller)
+        acted = result == "hatched"
+        if result != "hatched":
+            logger.info(f"hatch: {decision.why}")
     elif decision.action == "buy_barn":
         logger.info(
             "garden: buy the Red Barn Farm for 125,000 gold (it is a couch-potato like). "
             "The housing shop is not mapped, so the gold is not spent"
         )
     elif decision.action == "gold":
-        logger.info(
-            f"gold: {FARMS.get(decision.target, decision.target)}. "
-            "Combat is not in this tree, so no fight is started"
-        )
-    await asyncio.sleep(PAUSE_BETWEEN)
+        from .farm import fight_one
 
-
-async def _tend_from_home(client):
-    """Stand in the house when plants need care. Spells are not cast blind."""
-    from .travel import go_home, is_house
-
-    try:
-        zone = await client.zone_name() or ""
-    except Exception:
-        zone = ""
-    if not is_house(zone):
-        logger.info("garden: going home so the plants can be tended")
-        try:
-            await go_home(client)
-        except Exception as exc:
-            logger.info(f"garden: could not go home ({exc})")
-    logger.info(
-        "garden: cast a spell only when a plant is showing that need. "
-        "Pests on these plants are rank 1. Likes are placed, not cast: "
-        "Litter, King Parsley, a pixie, Sandwich Station, Tropical Garden Gnome, "
-        "and the Red Barn itself. No spell path is mapped, so nothing is cast"
-    )
+        logger.info(f"gold: {FARMS.get(decision.target, decision.target)}")
+        acted = await fight_one(client, decision.target, dancer.controller)
+    if not acted:
+        await asyncio.sleep(PAUSE_BETWEEN)
 
 
 def decide(snap: Snapshot) -> Decision:

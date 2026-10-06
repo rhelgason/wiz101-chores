@@ -25,8 +25,10 @@ def install(client):
         return
     raw = client.teleport
 
-    async def teleport(xyz, *args, **kwargs):
+    async def teleport(xyz, *args, allow_engage=False, **kwargs):
         client._teleport_aborted = False
+        if allow_engage:
+            return await raw(xyz, *args, **kwargs)
         try:
             mobs = await client.get_mobs()
         except Exception:

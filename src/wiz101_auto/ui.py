@@ -115,6 +115,59 @@ async def click_named(client, name: str) -> bool:
     return False
 
 
+async def visible_texts(client, limit: int = 80) -> list[str]:
+    """Visible window captions, shallowest first. Empty when the tree can't be read."""
+    found: list[str] = []
+
+    async def walk(window, depth: int):
+        if len(found) >= limit or depth > 6:
+            return
+        try:
+            if not await window.is_visible():
+                return
+            text = _TAGS.sub("", await window.maybe_text() or "").strip()
+            if text and text not in found:
+                found.append(text)
+            for child in await window.children():
+                await walk(child, depth + 1)
+        except Exception:
+            return
+
+    try:
+        await walk(client.root_window, 0)
+    except Exception as exc:
+        logger.trace(f"visible_texts failed: {exc}")
+    return found
+
+
+async def click_text(client, wanted: str) -> bool:
+    """Click the visible window whose caption is exactly `wanted`."""
+    target = wanted.strip().lower()
+    if not target:
+        return False
+
+    async def walk(window) -> bool:
+        try:
+            if not await window.is_visible():
+                return False
+            text = _TAGS.sub("", await window.maybe_text() or "").strip().lower()
+            if text == target:
+                await client.mouse_handler.click_window(window)
+                return True
+            for child in await window.children():
+                if await walk(child):
+                    return True
+        except Exception:
+            return False
+        return False
+
+    try:
+        return await walk(client.root_window)
+    except Exception as exc:
+        logger.trace(f"click_text {wanted!r} failed: {exc}")
+        return False
+
+
 async def named_text(client, name: str) -> str:
     """Text of the first window called `name` anywhere in the tree ("" if none)."""
     try:

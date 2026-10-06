@@ -76,8 +76,9 @@ reward screen offers. Couch potatoes replace those with rank 9s (Captain
 Canteloupe, Fancy Yogurt, Golden Wheat Bread). Ghultures love death
 desserts and death cereals. Fancy Yogurt is the dessert.
 
-The hatch window is not mapped. The bot names both parents and does not
-click the hatch, because a wrong click spends the gold.
+The hatch click happens only when the open kiosk page shows a ghulture and
+all five talents. A page that does not is left alone, because a wrong click
+spends the gold. Nothing is paid to speed the egg.
 
 ## 2. Couch potatoes
 
@@ -134,10 +135,13 @@ iron only. It does not realm-hop.
 ## 4. Fishing
 
 Fish when the tracked quest is a fishing quest, or when `fish` was asked.
-`fish --clear` drops the request. School fishing spells spend energy, and
-the reel minigame is not mapped. Casting one would spend the energy and
-fail the catch, so the bot does not cast. It records that the quest is
-waiting. Pet and garden still take the energy first.
+`fish --clear` drops the request. Pet and garden still take the energy first.
+
+The cast is the first lure on the fishing bar, which is a spell the wizard
+already owns. The reel is one press of space when a fish in the pond takes
+the lure. Nothing is written into the fish or the game clock. A cast is
+skipped when the pond is empty or the globe is under 2. A few catches, then
+the day plan looks again.
 
 ## 5. Gold
 
@@ -154,13 +158,14 @@ Keep 100,000 gold back while the ghulture is unfinished. That is one hatch.
 The barn is 125,000 on top of it. When a hatch is ready and the gold covers
 the hatch but not both, the hatch is paid. The barn is bought on the next
 stretch of training, once the bank holds the barn and still leaves the
-hatch. The housing shop is not mapped, so the gold is not spent until that
+hatch. The housing shop is not mapped, so the barn gold is not spent until that
 window has been read on a live client. The decision is made either way.
 
-Combat is not in this tree. The bot names the farm and does not start the
-fight. Pulling a mob and then standing in the duel would get the wizard
-killed. A fighter gets added when it can clear that one mob and sell, and
-it has to notice a full energy bar between pulls and leave.
+One fight, then the day plan looks again. The pull is the named mob
+(Splithoof Barbarians, Halfang, or a Wizard City street mob under level 20).
+The round uses an area hit from the deck already equipped, or one single
+hit on an enemy, or it passes. Health under about a third skips the pull.
+A full globe is noticed between fights because the fight is only one duel.
 
 ## What actually runs
 
@@ -168,8 +173,11 @@ it has to notice a full energy bar between pulls and leave.
 |---|---|
 | Dance | Yes. The base to adult, a perfect-stat body to mega, a miss not at all. One extra game when the bar is full and nothing else can spend it. |
 | Reagent pickup | Yes, for the one reagent that was asked for. |
-| Go home | Yes, when the garden needs care. |
-| Hatch, barn purchase, garden spells, fishing casts, gold fights | Decided and logged. Not clicked. |
+| Garden | Yes. Rank and seeds are read from the wizard. A spell is cast only when the plant's text names that need. One boom shroom seed from Farley when that is the next buy. |
+| Fishing | Yes, a few casts, when a quest or `fish` asked. Space on the bite. No clock change. |
+| Hatch | Yes, one hatch, and only when the open kiosk page shows a ghulture with all five talents. No crowns and no faster egg. |
+| Gold fight | Yes, one duel against the named mob, then back to the plan. |
+| Red Barn purchase | Decided and logged. The housing shop is not clicked. |
 
 `state/pet.json` remembers the equipped pet, the base, the previous base,
 and `confirm_mega`. `state/` is not committed. A missing `state/garden.json`
