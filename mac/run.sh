@@ -48,6 +48,8 @@ if [[ ! -f "$PY" ]]; then
 fi
 
 cd "$ROOT"
+# Wine 8 aborts on CopyFile2. This file makes shutil use a normal copy.
+cp "$ROOT/mac/sitecustomize.py" "$(dirname "$PY")/sitecustomize.py"
 WINSRC="$("$WINE" winepath -w "$ROOT/src")"
 export PYTHONPATH="$WINSRC"
 echo "starting the day plan in the Wizard101 bottle"

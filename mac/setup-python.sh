@@ -25,6 +25,8 @@ PTH="$(echo "$DEST"/python*._pth)"
 if [[ -f "$PTH" ]] && grep -q '^#import site' "$PTH"; then
   sed -i '' 's/^#import site/import site/' "$PTH"
 fi
+# Before any pip or bot copy. See mac/sitecustomize.py.
+cp "$(cd "$(dirname "$0")" && pwd)/sitecustomize.py" "$DEST/sitecustomize.py"
 if ! "$WINE" "$DEST/python.exe" -c "import sys; print(sys.version)"; then
   echo "Windows Python did not start in the Wizard101 bottle."
   exit 1
@@ -49,8 +51,10 @@ print(next(u["url"] for u in j["urls"] if u["packagetype"]=="bdist_wheel" and u[
   unzip -q -o "$TMP/pip.whl" -d "$SITE"
   rm -rf "$TMP"
 fi
-echo "installing loguru and pyyaml"
-"$WINE" "$DEST/python.exe" -m pip install --no-warn-script-location "loguru>=0.7.2" "pyyaml>=6.0.1"
+if ! "$WINE" "$DEST/python.exe" -c "import loguru, yaml" >/dev/null 2>&1; then
+  echo "installing loguru and pyyaml"
+  "$WINE" "$DEST/python.exe" -m pip install --no-warn-script-location "loguru>=0.7.2" "pyyaml>=6.0.1"
+fi
 # Hatchling's wheel build calls CopyFile2, which this Wine does not implement.
 # Both libraries are pure Python, so they are copied into site-packages.
 if ! "$WINE" "$DEST/python.exe" -c "import wizwalker" >/dev/null 2>&1; then

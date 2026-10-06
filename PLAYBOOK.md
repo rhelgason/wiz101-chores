@@ -201,3 +201,9 @@ the game share a wineserver. `mac/run.sh` does that. It also opens the menu
 bar stop. The hook itself is unproven until the game is logged in and
 standing in the world: Wine on Apple Silicon is translating the game, and a
 memory hook can fail there even though a Windows process starts.
+
+Python 3.13 copies files with CopyFile2. This Wine does not implement it,
+and the process aborts. The dialog can name Wizard101; the crashing process
+is python.exe, and closing the dialog leaves the game running.
+`mac/sitecustomize.py` is placed next to that Python so the copy is a normal
+read and write. `mac/run.sh` refreshes that file on each start.
