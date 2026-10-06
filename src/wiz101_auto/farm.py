@@ -1,7 +1,9 @@
 """One fight for seeds or gold, then back to the day plan.
 
-The mob is the one named for that farm. Savarstaad casts Deathblade, then
-Empower, then Scarecrow, and passes while the next of those is not ready.
+The mob is the one named for that farm, by its template name or the name
+on its plate. Savarstaad casts Deathblade, then Empower, then Scarecrow,
+and passes while the next of those is not ready. If those creatures are
+not loaded, it moves through the pass until one is.
 Any other farm casts an area hit from the deck that is already equipped, or
 a single hit, or it passes. Below about 60% health, and only when that next
 card cannot be cast, the round casts a death drain on an enemy first (Ghoul,
@@ -13,6 +15,7 @@ health wisp and returns. Nothing here stops the session.
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 
 from loguru import logger
@@ -25,10 +28,37 @@ PLACES = {
 }
 NEEDLES = {
     "splithoof": ("splithoof", "barbarian"),
-    "seeds": ("troubled", "splithoof"),
+    "seeds": ("troubled", "splithoof barbarian"),
     "halfang": ("halfang", "bristlecrown"),
     "early-gold": ("lost soul", "rotten", "dark fairy", "ghoul"),
 }
+# First group wins over a closer creature from a later group.
+GROUPS = {
+    "seeds": (("troubled", "splithoof barbarian"), ("splithoof",)),
+    "splithoof": (("splithoof", "barbarian"),),
+    "halfang": (("halfang", "bristlecrown"),),
+    "early-gold": (("lost soul", "rotten", "dark fairy", "ghoul"),),
+}
+# Compass landmarks in Grizzleheim/GH_Hero (Compass.xml), plus the gate
+# back to Northguard. The camp is one of these; the client only loads the
+# creatures near the wizard.
+SAVARSTAAD_CAMPS = (
+    (-29892.1, 17385.7, 516.9),
+    (-21881.5, -1694.7, -38.1),
+    (-7599.6, -432.4, 641.3),
+    (-8122.4, -7139.8, 971.1),
+    (-7491.8, -4317.8, 501.9),
+    (-6529.6, -4087.8, 406.5),
+    (6449.9, -6051.4, 1927.8),
+    (22112.1, 1220.5, 601.3),
+    (23071.7, 19170.1, 2387.2),
+    (11919.6, 19511.6, 1213.5),
+    (7398.4, 37146.1, 1515.3),
+    (-8256.4, 36869.1, 1661.1),
+    (-11430.9, 23105.8, 880.1),
+)
+CAMPS = {"seeds": SAVARSTAAD_CAMPS, "splithoof": SAVARSTAAD_CAMPS}
+_camp_at = {"seeds": 0, "splithoof": 0}
 ROUNDS = 30
 HEAL_BELOW = 0.60  # cast a death drain while health is under this
 PULL_BELOW = 0.35  # gather health before starting another fight
@@ -39,9 +69,38 @@ DRAIN_EFFECTS = {"steal_health", "steal_over_time"}
 COMBO = ("deathblade", "empower", "scarecrow")
 
 
+def _flat(name: str) -> str:
+    return re.sub(r"[^a-z]", "", (name or "").lower())
+
+
+def mob_rank(name: str, groups: tuple[tuple[str, ...], ...]) -> int | None:
+    """Which name group matches, starting at 0. An earlier group is preferred."""
+    flat = _flat(name)
+    if not flat:
+        return None
+    for rank, group in enumerate(groups):
+        if any(_flat(needle) in flat for needle in group if _flat(needle)):
+            return rank
+    return None
+
+
 def mob_matches(name: str, needles: tuple[str, ...]) -> bool:
-    low = (name or "").lower()
-    return any(needle in low for needle in needles)
+    return mob_rank(name, (needles,)) is not None
+
+
+def best_mob(labels: list[tuple[str, float]], groups: tuple[tuple[str, ...], ...]) -> int | None:
+    """Index of the preferred named mob. Closer wins inside one group."""
+    chosen = None
+    key = None
+    for index, (label, dist) in enumerate(labels):
+        rank = mob_rank(label, groups)
+        if rank is None:
+            continue
+        candidate = (rank, dist)
+        if key is None or candidate < key:
+            key = candidate
+            chosen = index
+    return chosen
 
 
 def needs_heal(ratio: float | None) -> bool:
@@ -80,12 +139,12 @@ async def fight_one(client, target: str, controller=None) -> bool:
             return False
         if not await _go(client, target):
             return False
-        mob = await _find_mob(client, NEEDLES.get(target, ()))
+        mob, label = await _acquire_mob(client, target)
         if mob is None:
-            logger.info(f"farm: no {target} mob in this zone")
             return False
         try:
             pos = await mob.location()
+            logger.info(f"farm: pulling {label or target}")
             await client.teleport(pos, allow_engage=True)
         except Exception as exc:
             logger.info(f"farm: could not reach the mob ({exc})")
@@ -145,23 +204,119 @@ async def _go(client, target: str) -> bool:
     return False
 
 
-async def _find_mob(client, needles: tuple[str, ...]):
-    if not needles:
-        return None
+def _groups(target: str) -> tuple[tuple[str, ...], ...]:
+    return GROUPS.get(target) or ((NEEDLES.get(target, ()),),)
+
+
+async def _template_names(entity) -> tuple[str, str]:
+    template = await entity.object_template()
+    if not template:
+        return "", ""
+    object_name = (await template.object_name() or "").replace("_", " ")
+    code = (await template.display_name() or "").strip()
+    return object_name, code
+
+
+async def _plate(client, object_name: str, code: str) -> str:
+    """The template name plus the name floating over the creature."""
+    shown = ""
+    if code and "_" in code:
+        from .names import lang_name
+
+        shown = await lang_name(client, code)
+    elif code:
+        shown = code
+    return f"{object_name} {shown}".strip()
+
+
+async def _is_npc(entity) -> bool:
     try:
-        mobs = await client.get_mobs()
+        for behavior in await entity.inactive_behaviors():
+            kind = await behavior.read_type_name()
+            named = await behavior.behavior_name()
+            if kind == "NPCBehavior" or named == "NPCBehavior":
+                return True
+    except Exception:
+        return False
+    return False
+
+
+async def _nearby(client, groups: tuple[tuple[str, ...], ...]) -> list[tuple[object, str, float]]:
+    """Loaded entities. Plate names are read only when the template name missed."""
+    try:
+        entities = await client.get_base_entity_list()
     except Exception as exc:
-        logger.info(f"farm: mobs unreadable ({exc})")
-        return None
-    for mob in mobs:
+        logger.info(f"farm: creatures unreadable ({exc})")
+        return []
+    try:
+        me = await client.body.position()
+    except Exception:
+        me = None
+    raw = []
+    for entity in entities or []:
         try:
-            template = await mob.object_template()
-            name = (await template.object_name() or "") if template else ""
+            object_name, code = await _template_names(entity)
+            if not object_name and not code:
+                continue
+            pos = await entity.location()
+            dist = 0.0 if me is None else math.hypot(pos.x - me.x, pos.y - me.y)
         except Exception:
             continue
-        if mob_matches(name, needles):
-            return mob
-    return None
+        raw.append((entity, object_name, code, dist))
+    named = [(entity, object_name, dist) for entity, object_name, _code, dist in raw]
+    if best_mob([(label, dist) for _e, label, dist in named], groups) is not None:
+        return named
+    found = []
+    for entity, object_name, code, dist in raw:
+        label = object_name
+        try:
+            if code and await _is_npc(entity):
+                label = await _plate(client, object_name, code)
+        except Exception:
+            label = object_name
+        if label:
+            found.append((entity, label, dist))
+    return found
+
+
+def _name_sample(found: list[tuple[object, str, float]]) -> str:
+    words = [label for _e, label, _d in found if " " in label]
+    pool = words or [label for _e, label, _d in found if label]
+    return ", ".join(pool[:8]) or "nothing named"
+
+
+async def _acquire_mob(client, target: str):
+    """The closest preferred mob. If none are loaded, move to the next camp."""
+    groups = _groups(target)
+    found = await _nearby(client, groups)
+    pick = best_mob([(label, dist) for _e, label, dist in found], groups)
+    if pick is not None:
+        entity, label, _dist = found[pick]
+        return entity, label
+    camps = CAMPS.get(target)
+    sample = _name_sample(found)
+    if not camps:
+        logger.info(f"farm: no {target} mob in this zone ({sample})")
+        await asyncio.sleep(3.0)
+        return None, ""
+    spot = camps[_camp_at[target] % len(camps)]
+    _camp_at[target] += 1
+    logger.info(f"farm: no {target} mob loaded ({sample}); moving to another part of the zone")
+    try:
+        from wizwalker import XYZ
+
+        await client.teleport(XYZ(*spot), allow_engage=True)
+    except Exception as exc:
+        logger.info(f"farm: could not move to the next camp ({exc})")
+        await asyncio.sleep(2.0)
+        return None, ""
+    await asyncio.sleep(1.2)
+    found = await _nearby(client, groups)
+    pick = best_mob([(label, dist) for _e, label, dist in found], groups)
+    if pick is None:
+        return None, ""
+    entity, label, _dist = found[pick]
+    return entity, label
 
 
 async def _ratio(client) -> float | None:

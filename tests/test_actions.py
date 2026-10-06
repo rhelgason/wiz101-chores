@@ -1,6 +1,8 @@
 """Garden, hatch, and farm decisions that do not need the game."""
 
 from wiz101_auto.farm import (
+    CAMPS,
+    best_mob,
     combo_spell,
     is_death_heal,
     mob_matches,
@@ -77,7 +79,18 @@ def test_hatch_confirms_only_the_perfect_page_and_never_the_speed_button():
 
 def test_a_farm_mob_matches_its_name():
     assert mob_matches("Splithoof_Barbarian", ("splithoof", "barbarian"))
+    assert mob_matches("Splithoof Barbarian", ("troubled", "splithoof barbarian"))
+    assert mob_matches("Troubled Warrior", ("troubled", "splithoof barbarian"))
+    assert not mob_matches("Splithoof Rager", ("troubled", "splithoof barbarian"))
     assert not mob_matches("Boar", ("halfang",))
+
+
+def test_a_closer_rager_loses_to_the_named_barbarian():
+    groups = (("troubled", "splithoof barbarian"), ("splithoof",))
+    labels = [("Splithoof Rager", 10.0), ("Boar Splithoof Barbarian", 80.0)]
+    assert best_mob(labels, groups) == 1
+    assert best_mob([("Tree", 1.0)], groups) is None
+    assert len(CAMPS["seeds"]) > 4
 
 
 def test_savarstaad_names_the_three_combo_cards():
