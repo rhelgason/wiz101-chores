@@ -1,6 +1,15 @@
 import pytest
 
-from wiz101_auto.travel_data import find_gate, named_zone, parse_display_zones, parse_gates, parse_spots
+from wiz101_auto.travel_data import (
+    door_spot_usable,
+    find_gate,
+    named_zone,
+    parse_display_zones,
+    parse_gates,
+    parse_spots,
+    parse_zone_doors,
+    travel_step,
+)
 
 GATES_TEXT = """WORLD - WizardCity
 standard;-87.87;1760.75;-27.99;WizardCity/WC_Hub;WizardCity/WC_Ravenwood
@@ -92,6 +101,31 @@ def test_find_gate_routes_around_blocked_gates():
     objective = "Go To Colossus Boulevard Smith in Colossus Boulevard"
     assert find_gate(objective, "Cyclops", gates, zones)[1] == "Colossus"
     assert find_gate(objective, "Cyclops", gates, zones, {("Cyclops", "Colossus")})[1] == "OldeTown"
+
+
+def test_travel_step_uses_the_world_door_between_worlds():
+    gates = parse_gates(
+        "standard;1;1;0;WizardCity/WC_Streets/Interiors/WC_PET_Park;WizardCity/WC_Hub\n"
+        "standard;2;2;0;WizardCity/WC_Hub;WizardCity/WC_Ravenwood\n"
+        "standard;3;3;0;WizardCity/WC_Ravenwood;WizardCity/WC_Ravenwood_Teleporter\n"
+        "standard;4;4;0;Grizzleheim/GH_MainHub;Grizzleheim/GH_Hero\n"
+    )
+    doors = parse_zone_doors(
+        "WORLD - WizardCity\n"
+        "ZONEDOOR;100;100;100;WizardCity/WC_Ravenwood_Teleporter\n"
+        "WORLD - Grizzleheim\n"
+        "ZONEDOOR;13;-8700;750;Grizzleheim/GH_MainHub\n"
+    )
+    step = travel_step(
+        "WizardCity/WC_Streets/Interiors/WC_PET_Park", "Grizzleheim/GH_Hero", gates, doors
+    )
+    assert step[0] == "gate" and step[2] == "WizardCity/WC_Hub"
+    step = travel_step("WizardCity/WC_Ravenwood_Teleporter", "Grizzleheim/GH_Hero", gates, doors)
+    assert step[0] == "world" and step[1] == "WizardCity/WC_Ravenwood_Teleporter"
+    assert not door_spot_usable(step[2])
+    step = travel_step("Grizzleheim/GH_MainHub", "Grizzleheim/GH_Hero", gates, doors)
+    assert step[0] == "gate" and step[2] == "Grizzleheim/GH_Hero"
+    assert travel_step("Grizzleheim/GH_Hero", "Grizzleheim/GH_Hero", gates, doors) is None
 
 
 def test_gate_behind_is_opposite_the_facing_direction():

@@ -479,8 +479,18 @@ class PetDancer:
         if not await _visible(root, "PetGameTracks"):
             if not await self._on_sigil():
                 return "no sigil"
-            for _ in range(10):
-                await post_key(self.client.window_handle, "X", 0.3)
+            for _ in range(8):
+                # The prompt is a window. Click it first. X is the fallback, and
+                # only after the click has had a moment, so a late key cannot
+                # cancel a window that is already opening.
+                clicked = await ui.press_interact(self.client, keys=False)
+                logger.info(
+                    "pet: clicked the dance prompt" if clicked else "pet: no dance prompt to click"
+                )
+                if await _wait_for(lambda: _visible(root, "PetGameTracks"), 1.5):
+                    break
+                logger.info("pet: pressing X for the dance game")
+                await ui.press_x(self.client)
                 if await _wait_for(lambda: _visible(root, "PetGameTracks"), 1.5):
                     break
             else:

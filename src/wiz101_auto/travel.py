@@ -17,7 +17,15 @@ from loguru import logger
 from wizwalker import XYZ, Keycode
 
 from . import ui
-from .travel_data import gate_kind, gate_toward, note_zone_jump, press_x_gate, ride_gate
+from .travel_data import (
+    door_spot_usable,
+    gate_kind,
+    note_zone_jump,
+    press_x_gate,
+    ride_gate,
+    travel_step,
+    zone_doors,
+)
 from .world import is_free, wait_for_loading
 
 DORM = "WizardCity/Interiors/WC_Housing_Dorm_Interior"
@@ -94,45 +102,119 @@ async def _leave_dorm(client) -> bool:
     return (await client.zone_name() or "") == RAVENWOOD
 
 
-async def spiral_to(client, world: str) -> bool:
-    """Open the world gate here and choose `world` ("WizardCity") on the Spiral Map."""
-    from .relog import _find_button
+# The spiral door's world buttons (Deimos). The caption is what the map shows.
+SPIRAL_WORLDS = {
+    "WizardCity": ("wbtnWizardCity", "wizard city"),
+    "Krokotopia": ("wbtnKrokotopia", "krokotopia"),
+    "Marleybone": ("wbtnMarleybone", "marleybone"),
+    "MooShu": ("wbtnMooShu", "mooshu"),
+    "DragonSpire": ("wbtnDragonSpire", "dragonspyre"),
+    "Grizzleheim": ("wbtnGrizzleheim", "grizzleheim"),
+    "Celestia": ("wbtnCelestia", "celestia"),
+    "Wysteria": ("wbtnWysteria", "wysteria"),
+    "Zafaria": ("wbtnZafaria", "zafaria"),
+    "Avalon": ("wbtnAvalon", "avalon"),
+    "Azteca": ("wbtnAzteca", "azteca"),
+    "Khrysalis": ("wbtnKhrysalis", "khrysalis"),
+    "Polaris": ("wbtnPolaris", "polaris"),
+    "Arcanum": ("wbtnArcanum", "arcanum"),
+    "Mirage": ("wbtnMirage", "mirage"),
+    "Empyrea": ("wbtnEmpyrea", "empyrea"),
+    "Karamelle": ("wbtnKaramelle", "karamelle"),
+    "Lemuria": ("wbtnLemuria", "lemuria"),
+}
+DOOR_NEEDLES = ("universeteleport", "worlddoor", "zonedoor", "spiraldoor", "worldteleport")
 
-    label = "wizard city" if world == "WizardCity" else world.lower()
-    spot = await entity_pos(client, ("universeteleport",))
-    if spot is None:
-        logger.warning("no world gate in this zone")
-        return False
-    await client.teleport(spot)
-    await asyncio.sleep(0.8)
-    await client.send_key(Keycode.X, 0.1)
-    opened = False
-    for _ in range(20):
-        if await ui.is_visible(client, ui.SPIRAL_DOOR_TELEPORT):
-            opened = True
-            break
-        await asyncio.sleep(0.3)
-    if not opened:
-        logger.warning("the world gate did not open the Spiral Map")
-        return False
-    button = await _find_button(client.root_window, (label,))
-    for _ in range(6):
+
+async def _page_world(client, button_name: str, label: str):
+    """The world button on the spiral page that is open, if it is this one."""
+
+    async def match(window, depth: int = 0):
+        if depth > 4:
+            return None
+        try:
+            children = await window.children()
+        except Exception:
+            return None
+        for child in children:
+            try:
+                if not await child.is_visible():
+                    continue
+                name = await child.name() or ""
+                text = ui._TAGS.sub("", await child.maybe_text() or "").strip().lower()
+            except Exception:
+                continue
+            if name == button_name or text == label:
+                return child
+            found = await match(child, depth + 1)
+            if found is not None:
+                return found
+        return None
+
+    try:
+        options = await client.root_window.get_windows_with_name("optionWindow")
+    except Exception:
+        return None
+    for opt in options:
+        try:
+            if await opt.is_visible():
+                found = await match(opt)
+                if found is not None:
+                    return found
+        except Exception:
+            continue
+    return None
+
+
+async def _pick_world(client, world: str) -> bool:
+    """On an open spiral map, select `world` and press Teleport."""
+    button_name, label = SPIRAL_WORLDS.get(world, ("", world.lower()))
+    for _ in range(5):
+        await ui.click(client, ui.SPIRAL_DOOR_PREV)
+        await asyncio.sleep(0.15)
+    for _ in range(8):
+        button = await _page_world(client, button_name, label)
         if button is not None:
+            await ui.click_center(client, button)
             break
         if not await ui.click(client, ui.SPIRAL_DOOR_NEXT):
-            break
-        await asyncio.sleep(0.4)
-        button = await _find_button(client.root_window, (label,))
-    if button is None:
+            logger.warning(f"{label.title()} is not on the Spiral Map")
+            await ui.click(client, ui.SPIRAL_DOOR_EXIT)
+            return False
+        await asyncio.sleep(0.35)
+    else:
         logger.warning(f"{label.title()} is not on the Spiral Map")
         await ui.click(client, ui.SPIRAL_DOOR_EXIT)
         return False
     logger.info(f"Spiral Map: {label.title()}")
-    await ui.click_center(client, button)
     await asyncio.sleep(0.3)
-    await ui.click(client, ui.SPIRAL_DOOR_TELEPORT)
+    if not await ui.click_named(client, "teleportButton"):
+        await ui.click(client, ui.SPIRAL_DOOR_TELEPORT)
     await wait_for_loading(client, appear_timeout=8.0)
     return (await client.zone_name() or "").split("/")[0] == world
+
+
+async def spiral_to(client, world: str, spot=None) -> bool:
+    """Open the world door here and take it to `world` ("Grizzleheim")."""
+    place = await entity_pos(client, DOOR_NEEDLES)
+    if place is None and spot is not None and door_spot_usable(spot):
+        place = spot
+    if place is not None:
+        await client.teleport(place)
+        await asyncio.sleep(0.8)
+        closer = await entity_pos(client, DOOR_NEEDLES)
+        if closer is not None:
+            await client.teleport(closer)
+            await asyncio.sleep(0.4)
+    else:
+        logger.info("no world door marker; trying the prompt in this room")
+    for _ in range(12):
+        if await ui.is_visible(client, ui.SPIRAL_DOOR_TELEPORT):
+            return await _pick_world(client, world)
+        await ui.press_interact(client)
+        await asyncio.sleep(0.45)
+    logger.warning("the world door did not open the Spiral Map")
+    return False
 
 
 async def reach_wizard_city(client) -> bool:
@@ -162,7 +244,7 @@ async def _use_x_gate(client, pos, nxt: str, ride: bool) -> bool:
     for _leg in range(2 if ride else 1):
         here = await client.zone_name()
         for _ in range(10):
-            await client.send_key(Keycode.X, 0.1)
+            await ui.press_interact(client)
             await asyncio.sleep(0.5)
             if await client.zone_name() != here:
                 break
@@ -183,24 +265,41 @@ async def _walk_gate(client, pos, zone: str) -> bool:
 
 
 async def go_to_zone(client, dest: str, max_hops: int = MAX_HOPS) -> bool:
-    """Walk the known gates to `dest`. True once there."""
+    """Walk gates to `dest`. Another world is the world door, then its gates."""
+    from .travel_data import _data
+
     blocked: set[tuple[str, str]] = set()
-    for _ in range(max_hops):
+    took_door = False
+    try:
+        doors = zone_doors()
+        gates = _data()[0]
+    except Exception as exc:
+        logger.warning(f"no gate data ({exc})")
+        return False
+    for _ in range(max_hops + 2):
         zone = await client.zone_name() or ""
         if zone == dest:
             return True
         if not await is_free(client):
             logger.info(f"stopped on the way to {dest}: not free to move")
             return False
-        try:
-            gate = gate_toward(zone, dest, blocked)
-        except Exception as exc:
-            logger.warning(f"no gate data ({exc})")
+        step = travel_step(zone, dest, gates, doors, blocked)
+        if step is None:
+            where = "the world door" if zone.split("/")[0] != dest.split("/")[0] else dest
+            logger.info(f"no gate path from {zone} to {where}")
             return False
-        if not gate:
-            logger.info(f"no gate path from {zone} to {dest}")
-            return False
-        pos, nxt = gate
+        if step[0] == "world":
+            if took_door:
+                logger.info(f"the world door did not reach {dest}")
+                return False
+            took_door = True
+            _door_zone, door_pos = step[1], step[2]
+            logger.info(f"taking the world door to {dest.split('/')[0]}")
+            spot = door_pos if door_spot_usable(door_pos) else None
+            if not await spiral_to(client, dest.split("/")[0], spot):
+                return False
+            continue
+        _kind, pos, nxt = step
         kind = gate_kind(zone, nxt)
         logger.info(f"heading to {dest}: gate to {nxt}")
         if press_x_gate(kind):

@@ -470,6 +470,35 @@ async def click(client, path: list[str]) -> bool:
         return False
 
 
+async def press_x(client) -> None:
+    """Press X. PostMessage is what this Wine build delivers; SendMessage is the other path."""
+    try:
+        from .petdance import post_key
+
+        await post_key(client.window_handle, "X", 0.25)
+    except Exception as exc:
+        logger.debug(f"could not post X: {exc}")
+    try:
+        from wizwalker import Keycode
+
+        await client.send_key(Keycode.X, 0.2)
+    except Exception as exc:
+        logger.debug(f"could not send X: {exc}")
+
+
+async def press_interact(client, *, keys: bool = True) -> bool:
+    """Use whatever is in front of the wizard.
+
+    Left-click the Press X prompt. On this Wine build the dance sigil ignores
+    both SendMessage and PostMessage, and a click on that prompt is the use.
+    The key is still sent when `keys` is set, for a client that listens to it.
+    """
+    clicked = await click(client, NPC_RANGE_TEXT) or await click(client, NPC_RANGE)
+    if keys:
+        await press_x(client)
+    return clicked
+
+
 async def close_menus(client) -> int:
     closed = 0
     for path in [*CLOSE_BUTTONS, TRAINER_EXIT]:

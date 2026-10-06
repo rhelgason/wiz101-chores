@@ -144,6 +144,62 @@ def parse_display_zones(text: str) -> DisplayZones:
     return zones
 
 
+def parse_zone_doors(text: str) -> dict[str, tuple[str, XYZ]]:
+    """World name -> (zone, position) of its world door.
+
+    `uniqueObjectLocations.txt` lines `ZONEDOOR;x;y;z;zone` under `WORLD - Name`.
+    """
+    doors: dict[str, tuple[str, XYZ]] = {}
+    world = ""
+    for line in text.splitlines():
+        if line.startswith("WORLD - "):
+            world = line.split(" - ", 1)[1].strip()
+            continue
+        parts = line.split(";")
+        if world and len(parts) == 5 and parts[0] == "ZONEDOOR":
+            doors[world] = (parts[4].strip(), XYZ(float(parts[1]), float(parts[2]), float(parts[3])))
+    return doors
+
+
+def door_spot_usable(pos: XYZ) -> bool:
+    """100,100,100 is the unmeasured placeholder, not a place to stand."""
+    return abs(pos.x - 100) > 0.01 or abs(pos.y - 100) > 0.01 or abs(pos.z - 100) > 0.01
+
+
+def travel_step(
+    zone: str,
+    dest: str,
+    gates: Gates,
+    doors: dict[str, tuple[str, XYZ]],
+    blocked: set[tuple[str, str]] = frozenset(),
+):
+    """The next move toward `dest`.
+
+    ('gate', pos, next_zone) walks one gate. ('world', door_zone, pos) means
+    stand at this world's door and take it: street gates never leave a world.
+    None when nothing known connects them.
+    """
+    if not zone or not dest or zone == dest:
+        return None
+    if zone.split("/")[0] != dest.split("/")[0]:
+        door = doors.get(zone.split("/")[0])
+        if door is None:
+            return None
+        door_zone, door_pos = door
+        if zone != door_zone:
+            hop = first_hop_toward(zone, door_zone, gates, blocked)
+            if hop is None:
+                return None
+            pos, nxt = hop
+            return ("gate", pos, nxt)
+        return ("world", door_zone, door_pos)
+    hop = first_hop_toward(zone, dest, gates, blocked)
+    if hop is None:
+        return None
+    pos, nxt = hop
+    return ("gate", pos, nxt)
+
+
 def parse_spots(text: str) -> Spots:
     """`objectLocations.txt` lines `kind;x;y;z;zone` (zekeObject, eloiseObject...), grouped by zone."""
     spots: Spots = {}
@@ -278,7 +334,17 @@ def _data() -> tuple[Gates, DisplayZones, Spots]:
     return _cache
 
 
+_doors: dict[str, tuple[str, XYZ]] | None = None
 _kinds: dict[tuple[str, str], str] | None = None
+
+
+def zone_doors() -> dict[str, tuple[str, XYZ]]:
+    """Each world's door, from WizSprinter's uniqueObjectLocations.txt."""
+    global _doors
+    if _doors is None:
+        text = (_traversal_dir() / "uniqueObjectLocations.txt").read_text()
+        _doors = parse_zone_doors(text)
+    return _doors
 
 
 GATE_KINDS_FILE = Path("state") / "gate_kinds.json"  # {"from|to": kind}: learned gates' kinds
