@@ -74,6 +74,19 @@ def _python() -> str:
     return sys.executable
 
 
+def forget_stale_requests() -> list[str]:
+    """Drop stop and pause files left by a crash. Starting is a request to run.
+
+    A stop or pause written after this returns is still honored.
+    """
+    cleared = []
+    for path in (STOP_FILE, STOP_FILE.parent / "pause.request"):
+        if path.is_file():
+            path.unlink(missing_ok=True)
+            cleared.append(path.name)
+    return cleared
+
+
 def start(config: str, supervise: bool) -> int:
     STATE.mkdir(exist_ok=True)
     pid = running_pid()

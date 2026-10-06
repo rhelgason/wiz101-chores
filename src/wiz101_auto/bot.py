@@ -7,7 +7,7 @@ import contextlib
 
 from loguru import logger
 from wizwalker import ClientHandler
-from wizwalker.errors import PatternFailed
+from wizwalker.errors import ClientClosedError, MemoryReadError, MemoryWriteError, PatternFailed
 from wizwalker.extensions.wizsprinter import SprintyClient
 
 from .config import Config
@@ -53,17 +53,26 @@ async def mouse_on_pause(client, controller, mouseless: bool):
     released = False
     try:
         while not controller.stopped.is_set():
-            if controller.paused and not released:
-                release_mouse_buttons(client)
-                if hook_on():
-                    await hooks.deactivate_mouseless_cursor_hook()
-                released = True
-                logger.info("paused: the mouse is yours")
-            elif not controller.paused and released:
-                if client.mouse_handler._ref_count > 0 and not hook_on():
-                    await hooks.activate_mouseless_cursor_hook()
-                released = False
-                logger.info("resumed: the bot has the mouse again")
+            try:
+                if controller.paused and not released:
+                    release_mouse_buttons(client)
+                    if hook_on():
+                        try:
+                            await hooks.deactivate_mouseless_cursor_hook()
+                        except Exception as exc:
+                            logger.warning(f"paused, but the mouse hook stayed ({exc})")
+                    released = True
+                    logger.info("paused: the mouse is yours")
+                elif not controller.paused and released:
+                    if client.mouse_handler._ref_count > 0 and not hook_on():
+                        try:
+                            await hooks.activate_mouseless_cursor_hook()
+                        except Exception as exc:
+                            logger.warning(f"resumed, but the mouse hook stayed off ({exc})")
+                    released = False
+                    logger.info("resumed: the bot has the mouse again")
+            except Exception as exc:
+                logger.warning(f"mouse hook: {exc}")
             await asyncio.sleep(0.3)
     finally:
         if released and client.mouse_handler._ref_count > 0 and not hook_on():
@@ -130,13 +139,13 @@ async def connect(handler: ClientHandler):
             )),
             timeout=HOOK_TIMEOUT,
         )
-    except PatternFailed:
+    except (PatternFailed, MemoryWriteError, MemoryReadError, ClientClosedError):
         await close_handler(handler)
         raise SystemExit(
             "\nCould not hook into the game: its memory still holds changes from an earlier bot "
             "session that did not shut down cleanly.\n"
             "FIX: fully close Wizard101 (exit to desktop), start it again, log in, then rerun.\n"
-            "To avoid this, stop the bot with Ctrl+Shift+Q (or Ctrl+C) instead of closing its window."
+            "To avoid this, stop the bot with Ctrl+Shift+Q (or the Wiz menu) instead of closing its window."
         ) from None
     except TimeoutError:
         raise SystemExit(
@@ -233,6 +242,7 @@ async def chore_loop(client, cfg: Config, controller: Controller, task: dict):
     dancer = PetDancer(client, cfg.pet, controller)
     gatherer = Gatherer(client, cfg.reagents.hop_zones, controller)
     last = ""
+    closed = 0
     while not controller.stopped.is_set():
         await controller.checkpoint()
         try:
@@ -245,6 +255,7 @@ async def chore_loop(client, cfg: Config, controller: Controller, task: dict):
                 wanted = games_requested() or 0
                 try:
                     await dancer.trip(wanted)
+                    closed = 0
                 finally:
                     PET_REQUEST.unlink(missing_ok=True)
                 continue
@@ -256,9 +267,25 @@ async def chore_loop(client, cfg: Config, controller: Controller, task: dict):
                 logger.info(f"day: {decision.action} — {decision.why}")
                 last = key
             await carry_out(decision, client, dancer, gatherer)
+            closed = 0
         except BotStopped:
             break
+        except ClientClosedError:
+            closed += 1
+            if closed >= 3:
+                logger.error(
+                    "Wizard101 closed while the bot was hooked. Fully quit Wizard101 "
+                    "(exit to desktop), start it, log in, stand in the world, then run "
+                    "./mac/run.sh again."
+                )
+                controller.stop("the game client closed")
+                break
+            if closed == 1:
+                logger.warning("the game client closed; retrying")
+            task["name"] = "waiting for the game"
+            await asyncio.sleep(2.0)
         except Exception as exc:
+            closed = 0
             logger.opt(exception=exc).error(f"chore step failed: {exc}")
             task["name"] = "error, retrying"
             await asyncio.sleep(1.0)
@@ -292,6 +319,11 @@ def _apply_mode(cfg: Config):
 
 async def run(cfg: Config):
     _apply_mode(cfg)
+    from .service import forget_stale_requests
+
+    cleared = forget_stale_requests()
+    if cleared:
+        logger.info(f"ignored a leftover {', '.join(cleared)} from an earlier run")
     s = cfg.safety
     controller = Controller(s.stop_key, s.pause_key, s.max_hours)
     doing = []

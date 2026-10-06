@@ -29,6 +29,16 @@ def test_pid_alive_and_running_pid(tmp_path, monkeypatch):
     assert service.running_pid() == 0
 
 
+def test_forget_stale_requests_clears_a_leftover_stop(tmp_path, monkeypatch):
+    monkeypatch.setattr(service, "STOP_FILE", tmp_path / "stop.request")
+    (tmp_path / "stop.request").write_text("earlier")
+    (tmp_path / "pause.request").write_text("earlier")
+    assert service.forget_stale_requests() == ["stop.request", "pause.request"]
+    assert service.forget_stale_requests() == []
+    assert not (tmp_path / "stop.request").exists()
+    assert not (tmp_path / "pause.request").exists()
+
+
 def test_stop_when_not_running(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "PID_FILE", tmp_path / "bot.pid")
     monkeypatch.setattr(service, "STATUS_FILE", tmp_path / "status.json")

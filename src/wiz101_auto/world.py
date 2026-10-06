@@ -15,7 +15,10 @@ async def is_free(client) -> bool:
             or await client.in_battle()
             or await ui.is_visible(client, ui.ADVANCE_DIALOG)
         )
-    except Exception:
+    except Exception as exc:
+        # A closed client is not "busy". Callers retry, then ask for a fresh game.
+        if type(exc).__name__ == "ClientClosedError":
+            raise
         return False
 
 

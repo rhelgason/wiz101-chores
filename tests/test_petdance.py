@@ -1,3 +1,5 @@
+import asyncio
+
 from wiz101_auto import petdance
 
 
@@ -10,6 +12,19 @@ def test_energy_numbers():
     assert petdance.first_number("Energy: 12/45") == 12
     assert petdance.first_number("Cost: 5") == 5
     assert petdance.first_number("") is None
+
+
+def test_post_key_holds_then_releases():
+    sent = []
+
+    def post(message, vk, lparam):
+        sent.append((message, vk, lparam))
+
+    asyncio.run(petdance.post_key(1, "X", 0.12, post=post))
+    assert sent[0] == (petdance.WM_KEYDOWN, ord("X"), 0)
+    assert sent[-1][0] == petdance.WM_KEYUP
+    assert sent[-1][1] == ord("X")
+    assert sum(message == petdance.WM_KEYDOWN for message, _, _ in sent) >= 2
 
 
 def test_request(tmp_path, monkeypatch):

@@ -76,11 +76,19 @@ async def activate_dance_hook(handler: HookHandler):
 
 
 async def deactivate_dance_hook(handler: HookHandler):
+    """Lift the dance hook. A closed client must not raise: the bytes die with it."""
     if not handler._check_if_hook_active(DanceGameMovesHook):
         return
     hook = handler._get_hook_by_type(DanceGameMovesHook)
-    del handler._active_hooks[DanceGameMovesHook]
-    await hook.unhook()
+    try:
+        await hook.unhook()
+    except Exception as exc:
+        logger.warning(
+            f"pet: could not lift the dance hook ({exc}). "
+            "Fully quit Wizard101 before the next run if the next start cannot hook."
+        )
+        return
+    handler._active_hooks.pop(DanceGameMovesHook, None)
     handler._base_addrs.pop("dance_game_moves", None)
 
 
@@ -105,6 +113,32 @@ def post_keys(window_handle: int, keys: str):
     for key in keys:
         user32.PostMessageW(window_handle, WM_KEYDOWN, ord(key), 0)
         user32.PostMessageW(window_handle, WM_KEYUP, ord(key), 0)
+
+
+def _user32_post(window_handle: int):
+    user32 = ctypes.windll.user32
+
+    def post(message: int, vk: int, lparam: int) -> None:
+        user32.PostMessageW(window_handle, message, vk, lparam)
+
+    return post
+
+
+async def post_key(window_handle: int, key: str, seconds: float = 0.3, *, post=None) -> None:
+    """Hold one key with PostMessageW, the same path the dance arrows use.
+
+    wizwalker's send_key uses SendMessageW. On this Wine build those taps
+    never opened the dance sigil; the arrows, posted this way, did.
+    """
+    send = post or _user32_post(window_handle)
+    vk = ord(key)
+    end = time.monotonic() + max(seconds, 0.05)
+    while True:
+        send(WM_KEYDOWN, vk, 0)
+        if time.monotonic() >= end:
+            break
+        await asyncio.sleep(0.05)
+    send(WM_KEYUP, vk, 0)
 
 
 def first_number(text: str) -> int | None:
@@ -394,8 +428,14 @@ class PetDancer:
         finally:
             if self.controller:
                 self.controller.end_idle()
-            await self._close_all()
-            await deactivate_dance_hook(self.client.hook_handler)
+            try:
+                await self._close_all()
+            except Exception as exc:
+                logger.warning(f"pet: could not close the dance windows ({exc})")
+            try:
+                await deactivate_dance_hook(self.client.hook_handler)
+            except Exception as exc:
+                logger.warning(f"pet: could not lift the dance hook ({exc})")
         logger.info(f"pet: {games} game(s) played; stopped: {why}")
         if not resumed and start and start != PET_PARK and await is_free(self.client):
             from .travel import go_to_zone
@@ -440,7 +480,7 @@ class PetDancer:
             if not await self._on_sigil():
                 return "no sigil"
             for _ in range(10):
-                await self.client.send_key(Keycode.X, 0.1)
+                await post_key(self.client.window_handle, "X", 0.3)
                 if await _wait_for(lambda: _visible(root, "PetGameTracks"), 1.5):
                     break
             else:
