@@ -41,7 +41,9 @@ casts Deathblade, then Empower, then Scarecrow, and passes while the next
 of those is not ready. A death drain is used only when health is low and
 that next card cannot be cast. If neither creature is loaded where the
 wizard is standing, it moves through the Savarstaad compass spots until
-one is. Mana under about a third walks to
+one is. It stands beside the creature and walks in. A creature that does
+not start a fight is left alone, so the next teleport is not onto that
+same spot. Mana under about a third walks to
 Northguard, takes a mana wisp, and comes back. A bag with two slots left
 goes to Elik at the Wizard City Bazaar, presses X, and opens Backpack Buddy.
 It sells only names that were not in the bag when the run started. Couch

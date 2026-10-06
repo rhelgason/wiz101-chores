@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import math
 import re
+import time
 
 from loguru import logger
 
@@ -59,6 +60,11 @@ SAVARSTAAD_CAMPS = (
 )
 CAMPS = {"seeds": SAVARSTAAD_CAMPS, "splithoof": SAVARSTAAD_CAMPS}
 _camp_at = {"seeds": 0, "splithoof": 0}
+# Land this far from a creature. On top of it, the teleport hook crashes the game.
+ENGAGE_GAP = 450.0
+# A creature that did not start a fight, or just died, is left alone this long.
+MISS_FOR = 20.0
+_leave_until: dict[int, float] = {}
 ROUNDS = 30
 HEAL_BELOW = 0.60  # cast a death drain while health is under this
 PULL_BELOW = 0.35  # gather health before starting another fight
@@ -86,6 +92,38 @@ def mob_rank(name: str, groups: tuple[tuple[str, ...], ...]) -> int | None:
 
 def mob_matches(name: str, needles: tuple[str, ...]) -> bool:
     return mob_rank(name, (needles,)) is not None
+
+
+def approach_point(
+    me: tuple[float, float, float],
+    mob: tuple[float, float, float],
+    gap: float = ENGAGE_GAP,
+) -> tuple[float, float, float]:
+    """A point `gap` from the creature, on the wizard's side of it."""
+    dx = mob[0] - me[0]
+    dy = mob[1] - me[1]
+    dist = math.hypot(dx, dy)
+    if dist < 1.0:
+        return mob[0] + gap, mob[1], mob[2]
+    reach = gap / dist if dist < gap else (dist - gap) / dist
+    if dist < gap:
+        return mob[0] - dx * reach, mob[1] - dy * reach, mob[2]
+    return me[0] + dx * reach, me[1] + dy * reach, mob[2]
+
+
+def leave_alone(gid: int, seconds: float = MISS_FOR) -> None:
+    if gid:
+        _leave_until[gid] = time.monotonic() + seconds
+
+
+def resting(gid: int, now: float | None = None) -> bool:
+    if not gid:
+        return False
+    return (time.monotonic() if now is None else now) < _leave_until.get(gid, 0.0)
+
+
+def _client_closed(exc: BaseException) -> bool:
+    return type(exc).__name__ == "ClientClosedError"
 
 
 def best_mob(labels: list[tuple[str, float]], groups: tuple[tuple[str, ...], ...]) -> int | None:
@@ -139,22 +177,35 @@ async def fight_one(client, target: str, controller=None) -> bool:
             return False
         if not await _go(client, target):
             return False
-        mob, label = await _acquire_mob(client, target)
+        mob, label, gid = await _acquire_mob(client, target)
         if mob is None:
             return False
         try:
             pos = await mob.location()
+            me = await client.body.position()
+            land = approach_point((me.x, me.y, me.z), (pos.x, pos.y, pos.z))
             logger.info(f"farm: pulling {label or target}")
-            await client.teleport(pos, allow_engage=True)
+            from wizwalker import XYZ
+
+            await client.teleport(XYZ(*land), allow_engage=True)
+            for _ in range(4):
+                if await client.in_battle():
+                    break
+                await asyncio.sleep(0.3)
+            if not await client.in_battle():
+                await client.goto(pos.x, pos.y)
         except Exception as exc:
+            if _client_closed(exc):
+                raise
             logger.info(f"farm: could not reach the mob ({exc})")
             return False
-        for _ in range(16):
+        for _ in range(10):
             if await client.in_battle():
                 break
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.4)
         if not await client.in_battle():
-            logger.info("farm: the mob did not start a fight")
+            leave_alone(gid)
+            logger.info("farm: that creature did not start a fight; leaving it alone")
             return False
         await _play(client, controller, combo=target == "seeds")
         await _note_potato(client)
@@ -164,11 +215,15 @@ async def fight_one(client, target: str, controller=None) -> bool:
         except Exception:
             pass
         logger.info(f"farm: the fight in {zone.split('/')[-1] or 'this zone'} is over")
+        leave_alone(gid, 12.0)
         await _recover(client, controller)
+        await asyncio.sleep(1.5)
         return True
     except BotStopped:
         raise
     except Exception as exc:
+        if _client_closed(exc):
+            raise
         logger.info(f"farm: the pull failed ({exc}); gathering health and going back")
         try:
             await _recover(client, controller)
@@ -241,7 +296,7 @@ async def _is_npc(entity) -> bool:
     return False
 
 
-async def _nearby(client, groups: tuple[tuple[str, ...], ...]) -> list[tuple[object, str, float]]:
+async def _nearby(client, groups: tuple[tuple[str, ...], ...]) -> list[tuple[object, str, float, int]]:
     """Loaded entities. Plate names are read only when the template name missed."""
     try:
         entities = await client.get_base_entity_list()
@@ -260,14 +315,16 @@ async def _nearby(client, groups: tuple[tuple[str, ...], ...]) -> list[tuple[obj
                 continue
             pos = await entity.location()
             dist = 0.0 if me is None else math.hypot(pos.x - me.x, pos.y - me.y)
+            gid = int(await entity.global_id_full() or 0)
         except Exception:
             continue
-        raw.append((entity, object_name, code, dist))
-    named = [(entity, object_name, dist) for entity, object_name, _code, dist in raw]
-    if best_mob([(label, dist) for _e, label, dist in named], groups) is not None:
+        raw.append((entity, object_name, code, dist, gid))
+    named = [(entity, object_name, dist, gid) for entity, object_name, _code, dist, gid in raw]
+    ready = [row for row in named if not resting(row[3])]
+    if best_mob([(label, dist) for _e, label, dist, _g in ready], groups) is not None:
         return named
     found = []
-    for entity, object_name, code, dist in raw:
+    for entity, object_name, code, dist, gid in raw:
         label = object_name
         try:
             if code and await _is_npc(entity):
@@ -275,30 +332,40 @@ async def _nearby(client, groups: tuple[tuple[str, ...], ...]) -> list[tuple[obj
         except Exception:
             label = object_name
         if label:
-            found.append((entity, label, dist))
+            found.append((entity, label, dist, gid))
     return found
 
 
-def _name_sample(found: list[tuple[object, str, float]]) -> str:
-    words = [label for _e, label, _d in found if " " in label]
-    pool = words or [label for _e, label, _d in found if label]
+def _ready(found: list[tuple[object, str, float, int]]) -> list[tuple[object, str, float, int]]:
+    now = time.monotonic()
+    return [row for row in found if not resting(row[3], now)]
+
+
+def _name_sample(found: list[tuple[object, str, float, int]]) -> str:
+    words = [label for _e, label, _d, _g in found if " " in label]
+    pool = words or [label for _e, label, _d, _g in found if label]
     return ", ".join(pool[:8]) or "nothing named"
 
 
 async def _acquire_mob(client, target: str):
-    """The closest preferred mob. If none are loaded, move to the next camp."""
+    """The closest preferred mob that was not just fought. Moves on if none are loaded."""
     groups = _groups(target)
-    found = await _nearby(client, groups)
-    pick = best_mob([(label, dist) for _e, label, dist in found], groups)
+    seen = await _nearby(client, groups)
+    found = _ready(seen)
+    pick = best_mob([(label, dist) for _e, label, dist, _g in found], groups)
     if pick is not None:
-        entity, label, _dist = found[pick]
-        return entity, label
+        entity, label, _dist, gid = found[pick]
+        return entity, label, gid
+    if any(resting(gid) and mob_rank(label, groups) is not None for _e, label, _d, gid in seen):
+        logger.info("farm: the nearby creatures just failed to fight; waiting for another")
+        await asyncio.sleep(4.0)
+        return None, "", 0
     camps = CAMPS.get(target)
-    sample = _name_sample(found)
+    sample = _name_sample(seen)
     if not camps:
         logger.info(f"farm: no {target} mob in this zone ({sample})")
         await asyncio.sleep(3.0)
-        return None, ""
+        return None, "", 0
     spot = camps[_camp_at[target] % len(camps)]
     _camp_at[target] += 1
     logger.info(f"farm: no {target} mob loaded ({sample}); moving to another part of the zone")
@@ -307,16 +374,18 @@ async def _acquire_mob(client, target: str):
 
         await client.teleport(XYZ(*spot), allow_engage=True)
     except Exception as exc:
+        if _client_closed(exc):
+            raise
         logger.info(f"farm: could not move to the next camp ({exc})")
         await asyncio.sleep(2.0)
-        return None, ""
+        return None, "", 0
     await asyncio.sleep(1.2)
-    found = await _nearby(client, groups)
-    pick = best_mob([(label, dist) for _e, label, dist in found], groups)
+    found = _ready(await _nearby(client, groups))
+    pick = best_mob([(label, dist) for _e, label, dist, _g in found], groups)
     if pick is None:
-        return None, ""
-    entity, label, _dist = found[pick]
-    return entity, label
+        return None, "", 0
+    entity, label, _dist, gid = found[pick]
+    return entity, label, gid
 
 
 async def _ratio(client) -> float | None:

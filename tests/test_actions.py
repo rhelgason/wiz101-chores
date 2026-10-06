@@ -1,13 +1,19 @@
 """Garden, hatch, and farm decisions that do not need the game."""
 
+import math
+import time
+
 from wiz101_auto.farm import (
     CAMPS,
+    approach_point,
     best_mob,
     combo_spell,
     is_death_heal,
+    leave_alone,
     mob_matches,
     needs_heal,
     next_combo,
+    resting,
     too_hurt_to_pull,
 )
 from wiz101_auto.fishing import bite_ready, can_cast
@@ -83,6 +89,17 @@ def test_a_farm_mob_matches_its_name():
     assert mob_matches("Troubled Warrior", ("troubled", "splithoof barbarian"))
     assert not mob_matches("Splithoof Rager", ("troubled", "splithoof barbarian"))
     assert not mob_matches("Boar", ("halfang",))
+
+
+def test_a_pull_lands_beside_the_mob_and_a_miss_is_left_alone():
+    land = approach_point((0.0, 0.0, 0.0), (1000.0, 0.0, 5.0))
+    assert abs(math.hypot(land[0] - 1000.0, land[1]) - 450.0) < 1.0
+    inside = approach_point((1000.0, 0.0, 5.0), (1000.0, 50.0, 5.0))
+    assert abs(math.hypot(inside[0] - 1000.0, inside[1] - 50.0) - 450.0) < 1.0
+    leave_alone(77, 20.0)
+    assert resting(77)
+    assert not resting(77, now=time.monotonic() + 60.0)
+    assert not resting(0)
 
 
 def test_a_closer_rager_loses_to_the_named_barbarian():
