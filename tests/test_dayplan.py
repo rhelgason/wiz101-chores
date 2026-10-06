@@ -34,6 +34,17 @@ def test_a_teen_miss_still_dances_when_the_globe_can_pay():
     assert decision.spend
 
 
+def test_four_energy_does_not_reopen_an_adult_dance():
+    # The level-up window never said "adult", so the stage table still prices a baby at 2.
+    # The track list said 6. Four energy must farm instead of opening that window again.
+    short = choose(_snap(pet_stage=None, energy=4, game_cost=6))
+    assert short.action == "gold"
+    assert short.target == "splithoof"
+    paid = choose(_snap(pet_stage=None, energy=6, game_cost=6))
+    assert paid.action == "dance"
+    assert paid.spend
+
+
 def test_an_empty_globe_farms_seeds_until_more_than_20_couch_potatoes():
     seeds = choose(_snap(
         pet_stage="adult", energy=0, couch_potato_seeds=14, couch_potatoes=20,

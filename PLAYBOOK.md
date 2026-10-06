@@ -15,7 +15,9 @@ Gardening, fishing, and hatching are paused. The modules are still here.
 The day plan does not choose them.
 
 1. **Dance.** While the globe can pay for one more game, play the dance
-   game. Feed the first snack after each win. An empty snack offer does not
+   game. The price is the one the dance window last showed: an adult game
+   is 6, and 4 energy leaves that window closed and farms. Feed the first
+   snack after each win. An empty snack offer does not
    end the trip. A talent outside the ghulture set does not end it either.
    This keeps going past adult and past mega.
 2. **Couch potato seeds.** When the globe cannot pay, fight Splithoof

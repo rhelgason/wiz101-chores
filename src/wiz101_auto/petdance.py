@@ -32,6 +32,7 @@ except ImportError:  # the dance hook only exists on Windows, next to the game
         pass
 
 from . import ui
+from .dayplan import DANCE_COST
 from .world import is_free, wait_for_loading
 
 PET_REQUEST = Path("state") / "pet.request"  # `pet`: games to play ("0": until the energy runs out)
@@ -236,6 +237,29 @@ def goal_reached(kind: str | None, stage: str | None, goals: dict, default_goal:
     if not stage or goal not in STAGES or stage not in STAGES:
         return False
     return STAGES.index(stage) >= STAGES.index(goal)
+
+
+def stage_for_cost(cost: int | None) -> str | None:
+    """6 -> 'adult'. The track window's price, when the level-up text was missed."""
+    for stage in STAGES:
+        if DANCE_COST.get(stage) == cost:
+            return stage
+    return None
+
+
+def remember_dance(cost: int | None) -> None:
+    """Keep the price the dance window showed, and the stage that price is."""
+    if not isinstance(cost, int):
+        return
+    pet = load_pet()
+    stage = stage_for_cost(cost)
+    changed = pet.get("dance_cost") != cost or (stage is not None and pet.get("stage") != stage)
+    pet["dance_cost"] = cost
+    if stage:
+        pet["stage"] = stage
+    save_pet(pet)
+    if changed and stage:
+        logger.info(f"pet: this dance costs {cost} ({stage})")
 
 
 def load_pet() -> dict:
@@ -466,6 +490,46 @@ class PetDancer:
             await asyncio.sleep(0.6)
         return False
 
+    async def _cannot_pay(self) -> bool:
+        """True when the last dance window priced a game the globe cannot buy.
+
+        Opening the track list to read that again is the click in and out.
+        """
+        known = load_pet().get("dance_cost")
+        if not isinstance(known, int) or known <= 0:
+            return False
+        now, _most = await self.energy()
+        if now is None or now >= known:
+            return False
+        logger.info(f"pet: energy {now} cannot pay {known}; leaving the dance game closed")
+        return True
+
+    async def _open_tracks(self) -> bool:
+        """Open the track list. X is only pressed while the Dance Game prompt is still up.
+
+        A click that already used the prompt must not be followed by X: that
+        key closes the window the click just opened.
+        """
+        root = self.client.root_window
+        for _ in range(4):
+            if await _visible(root, "PetGameTracks"):
+                return True
+            if await ui.text_at(self.client, NPC_TITLE) != DANCE_TITLE:
+                await asyncio.sleep(0.4)
+                continue
+            clicked = await ui.press_interact(self.client, keys=False)
+            logger.info("pet: clicked the dance prompt" if clicked else "pet: no dance prompt to click")
+            if await _wait_for(lambda: _visible(root, "PetGameTracks"), 3.0):
+                return True
+            if await ui.text_at(self.client, NPC_TITLE) != DANCE_TITLE:
+                logger.info("pet: the dance prompt closed; waiting for the track list")
+                return await _wait_for(lambda: _visible(root, "PetGameTracks"), 3.0)
+            logger.info("pet: pressing X for the dance game")
+            await ui.press_x(self.client)
+            if await _wait_for(lambda: _visible(root, "PetGameTracks"), 3.0):
+                return True
+        return await _visible(root, "PetGameTracks") is not None
+
     async def play_one(self, energy_floor: int = 0) -> str:
         """One game, from the sigil to the reward screen closed: 'won', or
         why it stopped ('no energy', 'no snacks', 'no sigil', 'no game')."""
@@ -477,27 +541,16 @@ class PetDancer:
             return await self.collect()
         await self._finish_rewards()  # (a reward page left open from the last game)
         if not await _visible(root, "PetGameTracks"):
+            if await self._cannot_pay():
+                return "no energy"
             if not await self._on_sigil():
                 return "no sigil"
-            for _ in range(8):
-                # The prompt is a window. Click it first. X is the fallback, and
-                # only after the click has had a moment, so a late key cannot
-                # cancel a window that is already opening.
-                clicked = await ui.press_interact(self.client, keys=False)
-                logger.info(
-                    "pet: clicked the dance prompt" if clicked else "pet: no dance prompt to click"
-                )
-                if await _wait_for(lambda: _visible(root, "PetGameTracks"), 1.5):
-                    break
-                logger.info("pet: pressing X for the dance game")
-                await ui.press_x(self.client)
-                if await _wait_for(lambda: _visible(root, "PetGameTracks"), 1.5):
-                    break
-            else:
+            if not await self._open_tracks():
                 return "no game"
         await self._learn("PetGameTracks")
         cost = first_number(await _text(root, "PetGameTracks", "txtEnergyCost"))
         have = first_number(await _text(root, "PetGameTracks", "txtYourEnergy"))
+        remember_dance(cost)
         logger.info(f"pet: energy {have} (a game costs {cost}; holding {energy_floor})")
         if cost is not None and have is not None and have < cost:
             return "no energy"

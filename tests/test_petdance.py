@@ -36,6 +36,18 @@ def test_request(tmp_path, monkeypatch):
     assert petdance.games_requested() == 3
 
 
+def test_a_window_price_is_remembered_as_the_stage(tmp_path, monkeypatch):
+    monkeypatch.setattr(petdance, "PET_STATE", tmp_path / "pet.json")
+    assert petdance.stage_for_cost(6) == "adult"
+    assert petdance.stage_for_cost(1) is None
+    petdance.remember_dance(6)
+    saved = petdance.load_pet()
+    assert saved["dance_cost"] == 6
+    assert saved["stage"] == "adult"
+    petdance.remember_dance(None)
+    assert petdance.load_pet()["stage"] == "adult"
+
+
 def test_stage_and_goal():
     assert petdance.stage_in(["Your pet is now an Adult!", "Teen"]) == "adult"
     assert petdance.stage_in(["nothing here"]) is None

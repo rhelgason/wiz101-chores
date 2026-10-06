@@ -102,6 +102,7 @@ async def look(client, cfg, dancer) -> Snapshot:
         base_stage=base.get("stage"),
         base_talents=tuple(base.get("talents") or ()),
         base_stats=base_stats,
+        game_cost=pet.get("dance_cost") if isinstance(pet.get("dance_cost"), int) else None,
     )
 
 

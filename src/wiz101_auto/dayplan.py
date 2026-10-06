@@ -77,6 +77,7 @@ class Snapshot:
     base_stage: str | None = None
     base_talents: tuple[str, ...] = ()
     base_stats: dict | None = None
+    game_cost: int | None = None  # the price the dance window last showed
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,17 @@ class Decision:
 
 def dance_cost(stage: str | None) -> int:
     return DANCE_COST.get((stage or "baby").lower(), DANCE_COST["baby"])
+
+
+def price_of(snap: Snapshot) -> int:
+    """What one dance costs. The track window's price beats the stage table.
+
+    A missed "Adult" on the level-up window used to leave the table at a
+    baby price of 2, so 4 energy opened an adult game (6) and backed out.
+    """
+    if snap.game_cost:
+        return snap.game_cost
+    return dance_cost(snap.pet_stage)
 
 
 def reagent_from_quest(goal: str) -> str | None:
@@ -187,13 +199,13 @@ def _bar_is_full(snap: Snapshot) -> bool:
     """A level-up fills the globe. Leaving it there wastes the refill."""
     if snap.energy is None or not snap.energy_max or snap.energy < snap.energy_max:
         return False
-    return snap.energy >= dance_cost(snap.pet_stage)
+    return snap.energy >= price_of(snap)
 
 
 def _can_dance(snap: Snapshot, floor: int) -> bool:
     if snap.energy is None:
         return False
-    cost = dance_cost(snap.pet_stage)
+    cost = price_of(snap)
     return snap.energy >= cost and snap.energy - cost >= floor
 
 
