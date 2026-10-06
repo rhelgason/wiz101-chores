@@ -92,7 +92,215 @@ def stats_perfect(stats: dict | None) -> bool:
 
 
 def stage_at_least(stage: str | None, goal: str) -> bool:
+    got = _stage_index(stage)
+    want = _stage_index(goal)
+    return got >= 0 and want >= 0 and got >= want
+
+
+def _stage_index(stage: str | None) -> int:
     try:
-        return _STAGES.index((stage or "").lower()) >= _STAGES.index(goal)
+        return _STAGES.index((stage or "").lower())
     except ValueError:
+        return -1
+
+
+# The hatch partner that never changes. It is not a pet we own.
+KIOSK = "the kiosk perfect ghulture"
+
+
+def shortfall(stats: dict | None) -> int | None:
+    """How far the max stats are below the perfect line. 0 is perfect. None if unread."""
+    if not stats:
+        return None
+    total = 0
+    for name, cap in PERFECT_STATS.items():
+        try:
+            value = int(stats[name])
+        except (KeyError, TypeError, ValueError):
+            return None
+        total += max(0, cap - 5 - value)
+    return total
+
+
+def _hits(talents) -> int:
+    return sum(1 for talent in talents or () if talent in TARGET)
+
+
+def rank_key(stats, talents, stage) -> tuple | None:
+    """Higher is closer to the perfect ghulture. None when a talent has already failed."""
+    if pet_failed(talents or ()):
+        return None
+    missing = shortfall(stats)
+    known = 1 if missing is not None else 0
+    gap = -(missing if missing is not None else 0)
+    return (known, gap, _hits(talents), _stage_index(stage))
+
+
+def is_closer(body: dict | None, base: dict | None) -> bool:
+    """True when `body` should replace the saved base. A miss never does."""
+    if not body:
         return False
+    key = rank_key(body.get("stats"), body.get("talents") or (), body.get("stage"))
+    if key is None:
+        return False
+    if not base:
+        return True
+    other = rank_key(base.get("stats"), base.get("talents") or (), base.get("stage"))
+    if other is None:
+        return True
+    return key > other
+
+
+def _same_body(saved: dict, equipped: dict) -> bool:
+    """The equipped pet is the saved one, maybe a stage or a talent further on."""
+    saved_kind = (saved.get("kind") or "").lower()
+    equipped_kind = (equipped.get("kind") or "").lower()
+    if saved_kind and equipped_kind and saved_kind != equipped_kind:
+        return False
+    saved_stats, equipped_stats = saved.get("stats"), equipped.get("stats")
+    if isinstance(saved_stats, dict) and saved_stats and isinstance(equipped_stats, dict) and equipped_stats:
+        try:
+            return all(int(saved_stats[name]) == int(equipped_stats[name]) for name in PERFECT_STATS)
+        except (KeyError, TypeError, ValueError):
+            return False
+    saved_known = isinstance(saved_stats, dict) and bool(saved_stats)
+    equipped_known = isinstance(equipped_stats, dict) and bool(equipped_stats)
+    if saved_known or equipped_known:
+        return False
+    old = list(saved.get("talents") or [])
+    new = list(equipped.get("talents") or [])
+    if not all(talent in new for talent in old):
+        return False
+    return _stage_index(equipped.get("stage")) >= _stage_index(saved.get("stage"))
+
+
+def _view(kind, stage, talents, stats) -> dict:
+    return {
+        "kind": kind or "ghulture",
+        "stage": stage,
+        "talents": list(talents or []),
+        "stats": stats if isinstance(stats, dict) else None,
+    }
+
+
+def _worth_adult(body: dict, base: dict | None) -> bool:
+    """Adult is the hatch line. Only the base, or a body that should become it, is worth that."""
+    if base and _same_body(base, body):
+        return True
+    return is_closer(body, base)
+
+
+def training_goal(kind, stage, talents, stats, confirm_mega, base) -> str | None:
+    """'adult' or 'mega' while this body should be danced. None when it should not."""
+    if (kind or "").lower() not in ("", "ghulture"):
+        return None
+    if (kind or "") == "" and not talents and not stats and not base:
+        # The first look has not named the pet yet. One stretch of games reads it.
+        return None if stage_at_least(stage, "adult") else "adult"
+    if (kind or "").lower() != "ghulture":
+        return None
+    if pet_failed(talents or ()):
+        return None
+    # Max stats are fixed at the hatch. Leveling does not raise them. A body
+    # already at the caps can still be the perfect pet, so it is trained out.
+    # Every other body stops at adult, and only if it is the one we hatch.
+    if confirm_mega or shortfall(stats) == 0:
+        return None if stage_at_least(stage, "mega") else "mega"
+    body = _view(kind, stage, talents, stats)
+    if not _worth_adult(body, base):
+        return None
+    return None if stage_at_least(stage, "adult") else "adult"
+
+
+def project_finished(kind, stage, talents, stats) -> bool:
+    """The equipped pet is the perfect ghulture. The hatch reserve can be spent."""
+    if (kind or "").lower() != "ghulture" or pet_failed(talents or ()):
+        return False
+    if not stage_at_least(stage, "mega") or _hits(talents) < len(TARGET):
+        return False
+    missing = shortfall(stats)
+    return missing is None or missing == 0
+
+
+def _hatchable(base: dict | None) -> bool:
+    if not base or (base.get("kind") or "").lower() != "ghulture":
+        return False
+    if pet_failed(base.get("talents") or ()) or not stage_at_least(base.get("stage"), "adult"):
+        return False
+    return not project_finished(base.get("kind"), base.get("stage"), base.get("talents"), base.get("stats"))
+
+
+def hatch_text(kind, stage, talents, stats, confirm_mega, base) -> str | None:
+    """Why to hatch the base with the kiosk pet. None while this body is still worth training."""
+    if training_goal(kind, stage, talents, stats, confirm_mega, base):
+        return None
+    if project_finished(kind, stage, talents, stats):
+        return None
+    parent = base if _hatchable(base) else None
+    equipped = _view(kind, stage, talents, stats)
+    if parent and _same_body(parent, equipped) and pet_failed(talents or ()):
+        parent = None
+    failed = pet_failed(talents or ())
+    if failed:
+        if not parent:
+            return None
+        return (
+            "a manifested talent is outside the set; do not hatch this body. "
+            f"Hatch the base with {KIOSK}"
+        )
+    if parent is None and (kind or "").lower() == "ghulture" and _hatchable(equipped):
+        parent = equipped
+    if parent is None:
+        return None
+    return (
+        f"hatch the base with {KIOSK}: 255/250/260/260/250, "
+        "death-dealer, death-giver, pain-giver, mighty, and armor breaker"
+    )
+
+
+def note_equipped(record: dict) -> dict:
+    """Remember the closest clean ghulture as the base. A new miss drops back to the one before it."""
+    rec = dict(record)
+    kind = (rec.get("kind") or "").lower()
+    talents = list(rec.get("talents") or [])
+    stats = rec.get("stats") if isinstance(rec.get("stats"), dict) else None
+    if kind not in ("", "ghulture"):
+        return rec
+    if kind == "" and not talents and not stats:
+        return rec
+    equipped = _view(rec.get("kind"), rec.get("stage"), talents, stats)
+    base = rec.get("base") if isinstance(rec.get("base"), dict) else None
+    prior = rec.get("prior_base") if isinstance(rec.get("prior_base"), dict) else None
+    if pet_failed(talents):
+        if base and _same_body(base, equipped):
+            rec["base"] = prior
+            rec["prior_base"] = None
+        return rec
+    if base and _same_body(base, equipped):
+        rec["base"] = equipped
+        return rec
+    if is_closer(equipped, base):
+        if base:
+            rec["prior_base"] = base
+        rec["base"] = equipped
+    return rec
+
+
+_STAT_LINE = re.compile(
+    r"\b(strength|intellect|agility|will|power)\b\D{0,12}(\d{1,3})",
+    re.I,
+)
+
+
+def stats_mentioned(texts: list[str]) -> dict:
+    """All five max stats, when a window names every one. A partial read is ignored."""
+    found: dict[str, int] = {}
+    for text in texts:
+        for match in _STAT_LINE.finditer(text):
+            name = match.group(1).lower()
+            value = int(match.group(2))
+            if name not in found and 0 < value <= 400:
+                found[name] = value
+    if any(name not in found for name in PERFECT_STATS):
+        return {}
+    return found

@@ -296,7 +296,7 @@ async def run(cfg: Config):
     controller = Controller(s.stop_key, s.pause_key, s.max_hours)
     doing = []
     if cfg.pet.auto:
-        doing.append("pet dance when energy is full")
+        doing.append("ghulture dance while that body can still be perfect")
     if cfg.reagents.enabled:
         doing.append(f"reagent sweeps ({cfg.reagents.hop_zones} gate(s) out)")
     logger.info(f"mode={cfg.mode}: {', '.join(doing) or 'nothing enabled'}. "

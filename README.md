@@ -43,12 +43,20 @@ Only the dance game exposes its move list.
 `stop` unhooks the game. Killing the process leaves the hooks in, and the
 next start fails until Wizard101 is fully restarted.
 
-**Keys:** Ctrl+Shift+Q stops. Ctrl+Shift+P pauses.
+**Stop:** the menu bar item **Wiz on**, or double-click `Stop Wizard Bot.command`,
+or `python -m wiz101_auto stop`. That unhooks the game. Ctrl+Shift+Q does the
+same from inside the bottle. Ctrl+Shift+P pauses.
+
+On this Mac the game is the Windows client inside Wizard101.app's own Wine.
+`mac/run.sh` starts the bot in that bottle and opens the menu bar stop.
+CrossOver.app is not used for it. See PLAYBOOK.md.
 
 `config.yaml` is created from `configs/chores.yaml`. See `config.example.yaml`.
 
 | Command | What |
 |---|---|
+| `mac/run.sh` | on this Mac: the day plan inside the Wizard101 bottle, and the menu bar stop |
+| `stop` | unhook and quit, including from the Mac side |
 | `run` | the day plan (`-m pet` or `-m reagents` for one of those) |
 | `pet [--games N]` | dance now, ahead of the plan |
 | `reagent "scrap iron"` / `reagent --clear` | gather that reagent, or go back to the tracked quest |

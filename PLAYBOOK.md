@@ -11,15 +11,18 @@ sits there is wasted, so a full bar interrupts whatever else is going on.
 
 ## Order
 
-1. **Ghulture.** Dance while the project pet is below the stage it needs.
-   Leave 10 energy untouched if a plant is showing a need.
+1. **Ghulture.** Dance a body that can still be the perfect pet, or the base
+   up to adult. Leave 10 energy untouched if a plant is showing a need.
 2. **Garden.** Boom shrooms until gardening rank 3, then couch potatoes.
 3. **Fishing.** Only while a fishing quest is tracked or `fish` was asked.
-4. **Hatch.** No energy. When the body is ready and gold is at least 100,000.
-5. **Red Barn Farm.** 125,000 gold, and only with the hatch reserve still in
-   the bank, once couch potatoes can actually be planted.
-6. **Reagents.** Only a tracked "Collect ..." quest, or `reagent "scrap iron"`.
-7. **Gold.** Whatever time is left.
+4. **A full bar.** If nothing above can spend it, one dance, so a level-up
+   refill does not sit there.
+5. **Hatch.** The base with the kiosk perfect ghulture. No energy. Gold at
+   least 100,000. A hatch that is ready is paid before the barn.
+6. **Red Barn Farm.** 125,000 gold, and only when that hatch would still be
+   affordable afterwards, once couch potatoes can actually be planted.
+7. **Reagents.** Only a tracked "Collect ..." quest, or `reagent "scrap iron"`.
+8. **Gold.** Whatever time is left.
 
 `mode: pet` does only the ghulture. `mode: reagents` does only the reagent.
 `chores` is this list. An explicit `pet` command dances immediately.
@@ -41,30 +44,40 @@ talent value. Mighty adds strength on top of the 255; the 255 is the base.
 Talents manifest one per stage: teen, adult, ancient, epic, mega. Ultra
 adds no talent. Dance games cost 2 energy at baby and 2 more at each stage.
 
-Train to **adult** (two talents), then hatch that adult with a perfect
-ghulture from the kiosk. That is how the pool and the stats climb. A body
-that manifests anything outside the five is a miss. Stop at that stage,
-including teen. Do not train a miss up to adult, and do not hatch the miss.
-Hatch the last clean adult (the base) with the perfect ghulture again.
+Two pets matter, every hatch.
 
-When an adult is clean and its stats are already at the max, hatch once
-more and take **that baby** to mega. If the mega attempt misses, trash it
-and hatch the adult base again. The adult base is never trained past adult.
+- **The kiosk pet** does not change. It is a perfect ghulture from the hatch
+  making kiosk: the five talents above, and 255/250/260/260/250. Every hatch
+  is with that pet. It is not one we own, and it is not trained.
+- **The base** is the ghulture we own that is closest to that perfect pet.
+  Closer means less missing from the max stats, then more of the five
+  talents already manifested, then further trained. A manifested talent
+  outside the five is a miss and is never the base.
 
-That baby is marked with `"confirm_mega": true` in `state/pet.json`. The
-bot does not set the flag, because it does not click the hatch. After the
-hatch, put the flag on the new baby. While it is set and the talents stay
-inside the five, that body is trained to mega instead of hatched.
+Leveling does not raise max stats. A body that is short of the caps will
+not become perfect by dancing, so it is not trained past adult, and it is
+not trained at all unless it is the base (or it should replace the base).
+Adult is the line, because that is when a pet can be hatched. A miss stops
+where it failed, including teen. Do not hatch the miss. Hatch the previous
+base with the kiosk pet again.
 
-Only a ghulture is trained. Another pet equipped means energy is not spent
-on it. The first dance reads the kind off the pet window. Snacks are the
-first one the reward screen offers; couch potatoes are how those snacks
-get replaced with rank 9s (Captain Canteloupe, Fancy Yogurt, Golden Wheat
-Bread). Ghultures love death desserts and death cereals. Fancy Yogurt is
-the dessert. The other two are still the right tier.
+A body whose stats are already at the caps can still be the perfect pet, so
+that one is trained to mega. `"confirm_mega": true` in `state/pet.json` is
+the same instruction when the stats were not read. If that attempt misses,
+it is dropped and the previous base is the parent again.
 
-The hatch window is not mapped. The bot will say when to hatch and will
-not click through it, because a wrong click spends the gold.
+The base is remembered in `state/pet.json` under `base`, and the one before
+it under `prior_base`. `state/` is not committed.
+
+Only a ghulture is trained on purpose. Another pet equipped is left alone
+unless the energy bar is full and the garden and fishing have nothing to
+spend it on. Then one dance spends the refill. Snacks are the first one the
+reward screen offers. Couch potatoes replace those with rank 9s (Captain
+Canteloupe, Fancy Yogurt, Golden Wheat Bread). Ghultures love death
+desserts and death cereals. Fancy Yogurt is the dessert.
+
+The hatch window is not mapped. The bot names both parents and does not
+click the hatch, because a wrong click spends the gold.
 
 ## 2. Couch potatoes
 
@@ -137,8 +150,12 @@ energy cannot pay for the pet, the garden, or a fishing quest.
   Wintertusk. His amulets sell at the Bazaar. That is the gold farm.
 - Under level 20: Grizzleheim is closed. There is no seed run yet.
 
-Keep 100,000 gold back while the ghulture is unfinished. The reserve is
-for the next hatch, whose price climbs with pedigree.
+Keep 100,000 gold back while the ghulture is unfinished. That is one hatch.
+The barn is 125,000 on top of it. When a hatch is ready and the gold covers
+the hatch but not both, the hatch is paid. The barn is bought on the next
+stretch of training, once the bank holds the barn and still leaves the
+hatch. The housing shop is not mapped, so the gold is not spent until that
+window has been read on a live client. The decision is made either way.
 
 Combat is not in this tree. The bot names the farm and does not start the
 fight. Pulling a mob and then standing in the duel would get the wizard
@@ -149,11 +166,38 @@ it has to notice a full energy bar between pulls and leave.
 
 | Action | Runs |
 |---|---|
-| Dance | Yes. Stops at adult, at mega when `confirm_mega` is set, at the first bad talent, or when energy hits the garden reserve. |
+| Dance | Yes. The base to adult, a perfect-stat body to mega, a miss not at all. One extra game when the bar is full and nothing else can spend it. |
 | Reagent pickup | Yes, for the one reagent that was asked for. |
 | Go home | Yes, when the garden needs care. |
 | Hatch, barn purchase, garden spells, fishing casts, gold fights | Decided and logged. Not clicked. |
 
-`state/pet.json` remembers the kind, stage, talents, and `confirm_mega`.
-`state/` is not committed. A missing `state/garden.json` is read as rank 1
-with no seeds and no barn, so the garden work is boom shrooms.
+`state/pet.json` remembers the equipped pet, the base, the previous base,
+and `confirm_mega`. `state/` is not committed. A missing `state/garden.json`
+is read as rank 1 with no seeds and no barn, so the garden work is boom shrooms.
+
+## Stopping
+
+The bot has to unhook before the game is played. Closing its window leaves
+the hook in, and the next start fails until Wizard101 is restarted.
+
+On this Mac the stop is the menu bar item **Wiz on**. Choose **Stop and
+unhook**. The same thing is `Stop Wizard Bot.command` in the repo, or
+`python -m wiz101_auto stop` from the repo directory. Ctrl+Shift+Q is the
+stop key while the bot is a Windows process inside the bottle. The menu bar
+also sends it, once macOS Accessibility is allowed for that item.
+
+A stop is a clean stop. The supervisor does not start it again.
+
+## This Mac
+
+Wizard101.app is the Windows client inside a private Wine bottle (CrossOver
+23, bundled with the game). The graphical client is a 64-bit Windows
+program. macOS Python cannot open that process. CrossOver.app 26 is a
+different Wine, and pointing it at the game's bottle can upgrade the bottle
+and break the official launcher. Do not do that.
+
+The bot runs with Wizard101.app's own Wine, in that same bottle, so it and
+the game share a wineserver. `mac/run.sh` does that. It also opens the menu
+bar stop. The hook itself is unproven until the game is logged in and
+standing in the world: Wine on Apple Silicon is translating the game, and a
+memory hook can fail there even though a Windows process starts.

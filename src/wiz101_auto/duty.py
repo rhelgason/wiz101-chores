@@ -16,7 +16,8 @@ from loguru import logger
 
 from . import ui
 from .dayplan import FARMS, Decision, Snapshot, choose, fishing_quest, places_for, reagent_from_quest
-from .petdance import load_pet
+from .petdance import load_pet, save_pet
+from .petplan import note_equipped
 
 GARDEN_FILE = Path("state") / "garden.json"
 REAGENT_REQUEST = Path("state") / "reagent.request"
@@ -84,9 +85,15 @@ async def look(client, cfg, dancer) -> Snapshot:
         pass
     asked = _read(REAGENT_REQUEST)
     pet = load_pet()
+    updated = note_equipped(pet)
+    if updated != pet:
+        save_pet(updated)
+        pet = updated
     garden = garden_state()
     stats = pet.get("stats") if isinstance(pet.get("stats"), dict) else None
     talents = tuple(pet.get("talents") or ())
+    base = pet.get("base") if isinstance(pet.get("base"), dict) else {}
+    base_stats = base.get("stats") if isinstance(base.get("stats"), dict) else None
     return Snapshot(
         energy=energy,
         energy_max=energy_max,
@@ -106,15 +113,24 @@ async def look(client, cfg, dancer) -> Snapshot:
         fishing=_read(FISH_REQUEST) is not None or fishing_quest(goal),
         pet_training=cfg.pet.auto,
         mode=cfg.mode,
+        base_kind=base.get("kind"),
+        base_stage=base.get("stage"),
+        base_talents=tuple(base.get("talents") or ()),
+        base_stats=base_stats,
     )
 
 
 async def carry_out(decision: Decision, client, dancer, gatherer) -> None:
     """Do `decision`. Returns when that attempt is over (a dance trip, one sweep, or a wait)."""
     if decision.action == "dance":
-        dancer.cfg.goals["ghulture"] = decision.train_until or "adult"
-        dancer.cfg.default_goal = decision.train_until or "adult"
-        await dancer.trip(0, energy_floor=decision.energy_floor)
+        if decision.games <= 0:
+            dancer.cfg.goals["ghulture"] = decision.train_until or "adult"
+            dancer.cfg.default_goal = decision.train_until or "adult"
+        await dancer.trip(
+            decision.games,
+            energy_floor=decision.energy_floor,
+            past_goal=decision.games > 0,
+        )
         return
     if decision.action == "reagent":
         got = await gatherer.tick(only=decision.target or None, places=places_for(decision.target))
@@ -129,11 +145,7 @@ async def carry_out(decision: Decision, client, dancer, gatherer) -> None:
             "A cast would spend the energy and fail the reel, so none is cast"
         )
     elif decision.action == "hatch":
-        logger.info(
-            "hatch: take the ghulture to the Pet Pavilion kiosk and hatch with a perfect "
-            "ghulture (death-dealer, death-giver, pain-giver, mighty, armor breaker; "
-            "255/250/260/260/250). The hatch window is not mapped, so no gold is spent"
-        )
+        logger.info(f"hatch: {decision.why}. The hatch window is not mapped, so no gold is spent")
     elif decision.action == "buy_barn":
         logger.info(
             "garden: buy the Red Barn Farm for 125,000 gold (it is a couch-potato like). "

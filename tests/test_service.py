@@ -31,7 +31,21 @@ def test_pid_alive_and_running_pid(tmp_path, monkeypatch):
 
 def test_stop_when_not_running(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "PID_FILE", tmp_path / "bot.pid")
+    monkeypatch.setattr(service, "STATUS_FILE", tmp_path / "status.json")
+    monkeypatch.setattr(service, "STOP_FILE", tmp_path / "stop.request")
     assert service.stop() == 0
+    assert not (tmp_path / "stop.request").exists()
+
+
+def test_stop_reaches_a_bottle_bot_through_the_request_file(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(service, "STATE", tmp_path)
+    monkeypatch.setattr(service, "PID_FILE", tmp_path / "bot.pid")
+    monkeypatch.setattr(service, "STOP_FILE", tmp_path / "stop.request")
+    monkeypatch.setattr(service, "STATUS_FILE", tmp_path / "status.json")
+    service.write_status(state="running", task="dance")
+    assert service.stop(timeout=0.1) == 0
+    assert (tmp_path / "stop.request").exists()
+    assert "unhook" in capsys.readouterr().out
 
 
 def test_tail_missing_file(tmp_path):

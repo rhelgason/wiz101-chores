@@ -1,7 +1,7 @@
 """The day plan: energy first, then the thing that was asked for, then gold."""
 
 from wiz101_auto.dayplan import Snapshot, choose, fishing_quest, reagent_from_quest
-from wiz101_auto.petplan import pet_failed, stats_perfect, talents_mentioned
+from wiz101_auto.petplan import note_equipped, pet_failed, stats_mentioned, stats_perfect, talents_mentioned
 
 
 def _snap(**kw):
@@ -23,13 +23,22 @@ def test_a_full_bar_trains_the_baby_and_holds_energy_for_a_needy_plant():
 
 
 def test_a_teen_miss_is_not_trained_on_to_adult():
-    decision = choose(_snap(pet_stage="teen", manifested=("spell-proof",), energy=4))
+    decision = choose(_snap(
+        pet_stage="teen", manifested=("spell-proof",), energy=4,
+        base_kind="ghulture", base_stage="adult",
+        base_talents=("death-dealer", "pain-giver"),
+        base_stats={"strength": 240, "intellect": 240, "agility": 250, "will": 250, "power": 240},
+    ))
     assert decision.action == "hatch"
     assert "do not hatch this body" in decision.why
+    assert "kiosk" in decision.why
 
 
 def test_a_clean_adult_hatches_and_a_poor_one_goes_for_gold():
-    ready = choose(_snap(pet_stage="adult", manifested=("death-dealer", "pain-giver")))
+    ready = choose(_snap(
+        pet_stage="adult", manifested=("death-dealer", "pain-giver"),
+        energy=20, energy_max=50,
+    ))
     assert ready.action == "hatch"
     poor = choose(_snap(
         pet_stage="adult", manifested=("death-dealer",), gold=10_000,
@@ -39,14 +48,32 @@ def test_a_clean_adult_hatches_and_a_poor_one_goes_for_gold():
     assert poor.target == "halfang"  # seeds are stocked and the wizard is past 40
 
 
-def test_perfect_stats_mark_the_next_baby_for_mega():
-    decision = choose(_snap(
+def test_perfect_stats_are_trained_out_and_a_worse_body_is_not():
+    perfect = choose(_snap(
         pet_stage="adult",
         manifested=("death-dealer", "death-giver"),
         stats={"strength": 255, "intellect": 250, "agility": 260, "will": 260, "power": 250},
+        energy=40, energy_max=50,
     ))
-    assert decision.action == "hatch"
-    assert "take that baby to mega" in decision.why
+    assert perfect.action == "dance"
+    assert perfect.train_until == "mega"
+    base_stats = {"strength": 230, "intellect": 230, "agility": 240, "will": 240, "power": 230}
+    worse = choose(_snap(
+        pet_stage="baby", energy=20, energy_max=50,
+        stats={"strength": 200, "intellect": 200, "agility": 200, "will": 200, "power": 200},
+        base_kind="ghulture", base_stage="adult", base_stats=base_stats,
+        base_talents=("death-dealer",),
+    ))
+    assert worse.action == "hatch"
+    assert "kiosk" in worse.why
+    closer = choose(_snap(
+        pet_stage="baby", energy=20, energy_max=50,
+        stats={"strength": 250, "intellect": 250, "agility": 250, "will": 260, "power": 250},
+        base_kind="ghulture", base_stage="adult", base_stats=base_stats,
+        base_talents=("death-dealer",),
+    ))
+    assert closer.action == "dance"
+    assert closer.train_until == "adult"
 
 
 def test_the_confirm_pet_is_trained_to_mega_instead_of_hatched():
@@ -79,6 +106,33 @@ def test_scrap_iron_is_gathered_only_when_energy_has_nothing_to_do():
     assert idle.target == "scrap iron"
 
 
+def test_a_full_bar_is_spent_when_nothing_else_can_use_it():
+    decision = choose(_snap(
+        pet_kind="bloodbat", pet_stage="adult", energy=50, energy_max=50, red_barn=True,
+    ))
+    assert decision.action == "dance"
+    assert decision.games == 1
+
+
+def test_a_miss_drops_back_to_the_previous_base():
+    prior = {
+        "kind": "ghulture", "stage": "adult", "talents": ["death-dealer"],
+        "stats": {"strength": 230, "intellect": 230, "agility": 240, "will": 240, "power": 230},
+    }
+    current = {
+        "kind": "ghulture", "stage": "adult", "talents": ["death-dealer", "pain-giver"],
+        "stats": {"strength": 250, "intellect": 250, "agility": 250, "will": 250, "power": 250},
+    }
+    saved = note_equipped({**current, "base": prior})
+    assert saved["base"]["stats"]["strength"] == 250
+    assert saved["prior_base"]["stats"]["strength"] == 230
+    failed = dict(saved)
+    failed["talents"] = ["death-dealer", "pain-giver", "spell-proof"]
+    failed["stage"] = "ancient"
+    reverted = note_equipped(failed)
+    assert reverted["base"]["stats"]["strength"] == 230
+
+
 def test_fishing_loses_to_the_pet_and_runs_when_the_garden_is_idle():
     assert choose(_snap(fishing=True)).action == "dance"
     idle = choose(_snap(
@@ -108,3 +162,6 @@ def test_talent_text_and_perfect_stats():
     assert not pet_failed(["death-dealer", "mighty"])
     assert stats_perfect({"strength": 250, "intellect": 250, "agility": 255, "will": 260, "power": 250})
     assert not stats_perfect({"strength": 200, "intellect": 250, "agility": 260, "will": 260, "power": 250})
+    text = ["Strength: 255", "Intellect 250", "Agility 260", "Will 260", "Power 250"]
+    assert stats_mentioned(text)["strength"] == 255
+    assert stats_mentioned(["Strength 255"]) == {}

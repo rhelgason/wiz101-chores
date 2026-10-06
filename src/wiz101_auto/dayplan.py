@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass
 
 from .collect import REAGENTS, collect_item_name
-from .petplan import TARGET, pet_failed, stage_at_least, stats_perfect
+from .petplan import hatch_text, project_finished, training_goal
 
 DANCE_COST = {
     "baby": 2,
@@ -69,6 +69,11 @@ class Snapshot:
     fishing: bool = False
     pet_training: bool = True
     mode: str = "chores"  # chores | pet | reagents
+    # The owned ghulture closest to the kiosk perfect. Empty until one has been seen.
+    base_kind: str | None = None
+    base_stage: str | None = None
+    base_talents: tuple[str, ...] = ()
+    base_stats: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +83,7 @@ class Decision:
     train_until: str = ""
     energy_floor: int = 0
     target: str = ""  # reagent name, or a key in FARMS
+    games: int = 0  # dance this many times; 0 keeps going until the training goal
 
 
 def dance_cost(stage: str | None) -> int:
@@ -109,48 +115,43 @@ def places_for(reagent: str) -> tuple[str, ...]:
     return ()
 
 
-def _project(snap: Snapshot) -> bool:
-    """The equipped pet is the ghulture we are building, or we have not read its kind yet."""
-    return (snap.pet_kind or "").lower() in ("", "ghulture")
-
-
-def _ghulture(snap: Snapshot) -> bool:
-    return (snap.pet_kind or "").lower() == "ghulture"
+def _saved_base(snap: Snapshot) -> dict | None:
+    if not snap.base_kind and not snap.base_stage and not snap.base_talents and not snap.base_stats:
+        return None
+    return {
+        "kind": snap.base_kind,
+        "stage": snap.base_stage,
+        "talents": list(snap.base_talents),
+        "stats": snap.base_stats,
+    }
 
 
 def needs_training(snap: Snapshot) -> str | None:
-    """'adult' or 'mega' while this body should keep dancing. None to stop."""
-    if not snap.pet_training or not _project(snap):
+    """'adult' or 'mega' while this body is worth the energy. None to leave it."""
+    if not snap.pet_training:
         return None
-    if pet_failed(snap.manifested):
-        return None
-    stage = (snap.pet_stage or "baby").lower()
-    if snap.confirm_mega:
-        return None if stage_at_least(stage, "mega") else "mega"
-    if stage_at_least(stage, "adult"):
-        return None
-    return "adult"
+    return training_goal(
+        snap.pet_kind,
+        snap.pet_stage,
+        snap.manifested,
+        snap.stats,
+        snap.confirm_mega,
+        _saved_base(snap),
+    )
 
 
 def hatch_reason(snap: Snapshot) -> str | None:
-    """Why to hatch, ignoring gold. None while this body should still be trained."""
-    if not snap.pet_training or not _ghulture(snap):
+    """Why to hatch the base with the kiosk pet. None while a body is still worth training."""
+    if not snap.pet_training:
         return None
-    if snap.confirm_mega and not pet_failed(snap.manifested):
-        return None
-    if pet_failed(snap.manifested):
-        return (
-            "a manifested talent is outside the set; hatch the saved base with a "
-            "perfect ghulture, and do not hatch this body"
-        )
-    if not stage_at_least(snap.pet_stage, "adult"):
-        return None
-    if stats_perfect(snap.stats):
-        return (
-            "adult, talents clean, stats at the max; hatch once more with a perfect "
-            "ghulture and take that baby to mega"
-        )
-    return "adult with no failed talent; hatch it with a perfect ghulture"
+    return hatch_text(
+        snap.pet_kind,
+        snap.pet_stage,
+        snap.manifested,
+        snap.stats,
+        snap.confirm_mega,
+        _saved_base(snap),
+    )
 
 
 def garden_reason(snap: Snapshot) -> str | None:
@@ -178,6 +179,13 @@ def farm_for(snap: Snapshot) -> str:
     return "halfang"
 
 
+def _bar_is_full(snap: Snapshot) -> bool:
+    """A level-up fills the globe. Leaving it there wastes the refill."""
+    if snap.energy is None or not snap.energy_max or snap.energy < snap.energy_max:
+        return False
+    return snap.energy >= dance_cost(snap.pet_stage)
+
+
 def _can_dance(snap: Snapshot, floor: int) -> bool:
     if snap.energy is None:
         return False
@@ -190,17 +198,10 @@ def _can_hatch(snap: Snapshot) -> bool:
 
 
 def _project_open(snap: Snapshot) -> bool:
-    """Still building the pet, so the hatch reserve stays in the bank."""
+    """Still building the pet, so one hatch stays in the bank."""
     if not snap.pet_training:
         return False
-    have = [t for t in snap.manifested if t in TARGET]
-    finished = (
-        _ghulture(snap)
-        and stage_at_least(snap.pet_stage, "mega")
-        and not pet_failed(snap.manifested)
-        and len(have) >= len(TARGET)
-    )
-    return not finished
+    return not project_finished(snap.pet_kind, snap.pet_stage, snap.manifested, snap.stats)
 
 
 def barn_ready(snap: Snapshot) -> bool:
@@ -242,6 +243,13 @@ def choose(snap: Snapshot) -> Decision:
                 "fish",
                 "a fishing quest is tracked, and pet and garden are not waiting on energy",
             )
+
+    if _bar_is_full(snap):
+        return Decision(
+            "dance",
+            "energy is full, and the pet, the garden, and fishing cannot use it; one dance spends it",
+            games=1,
+        )
 
     hatch = hatch_reason(snap)
     if hatch:

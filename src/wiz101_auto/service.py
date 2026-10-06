@@ -131,14 +131,51 @@ def open_watch_window() -> None:
         print(f"could not open the live log window: {exc}")
 
 
+def _status() -> dict:
+    try:
+        data = json.loads(STATUS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def heartbeat_age() -> float | None:
+    """Seconds since the bot's last heartbeat, or None when it has never written one."""
+    data = _status()
+    try:
+        return time.time() - float(data["time"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def stop(timeout: float = 30.0) -> int:
+    """Ask the bot to unhook and exit.
+
+    A process id only works for a bot this operating system can see. Inside the
+    Wizard101 bottle the id is a Windows id, so a fresh heartbeat is enough:
+    the request file is what that process watches.
+    """
     pid = running_pid()
-    if not pid:
+    age = heartbeat_age()
+    live = age is not None and age < 30 and _status().get("state") != "stopped"
+    if not pid and not live:
         print("not running.")
         PID_FILE.unlink(missing_ok=True)
         return 0
     STATE.mkdir(exist_ok=True)
     STOP_FILE.write_text(time.strftime("%Y-%m-%d %H:%M:%S"))
+    if not pid:
+        print("asked the bot to stop; waiting for it to unhook...", end="", flush=True)
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if _status().get("state") == "stopped":
+                print(" stopped.")
+                STOP_FILE.unlink(missing_ok=True)
+                return 0
+            time.sleep(0.5)
+            print(".", end="", flush=True)
+        print(" request left in place. It unhooks on its next check, then you can play.")
+        return 0
     print(f"asked PID {pid} to stop; waiting for a clean shutdown...", end="", flush=True)
     end = time.monotonic() + timeout
     while time.monotonic() < end:

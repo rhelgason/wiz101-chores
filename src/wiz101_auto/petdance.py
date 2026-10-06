@@ -313,9 +313,12 @@ class PetDancer:
         changed = False
         if kind and kind != pet.get("kind"):
             pet["kind"], changed = kind, True
-        if window_name == "PetLevelUpWindow":
-            from .petplan import talents_mentioned
+        from .petplan import note_equipped, stats_mentioned, talents_mentioned
 
+        found = stats_mentioned(texts)
+        if found and found != pet.get("stats"):
+            pet["stats"], changed = found, True
+        if window_name == "PetLevelUpWindow":
             have = list(pet.get("talents") or [])
             for talent in talents_mentioned(texts):
                 if talent not in have:
@@ -327,11 +330,14 @@ class PetDancer:
         if stage and stage != old and (window_name == "PetLevelUpWindow" or old not in STAGES
                                        or STAGES.index(stage) > STAGES.index(old)):
             pet["stage"], changed = stage, True
+        updated = note_equipped(pet)
+        if updated != pet:
+            pet, changed = updated, True
         if changed:
             save_pet(pet)
             logger.info(f"pet: {pet.get('kind') or 'the pet'} is {pet.get('stage') or '?'}")
 
-    async def trip(self, wanted: int, energy_floor: int = 0):
+    async def trip(self, wanted: int, energy_floor: int = 0, *, past_goal: bool = False):
         start = await self.client.zone_name() or ""
         resumed = in_pet_game(start)
         if resumed:
@@ -361,7 +367,7 @@ class PetDancer:
                     why = "a talent outside the ghulture set manifested; stopping"
                     logger.info(f"pet: {why}")
                     break
-                if self.done():
+                if self.done() and not past_goal:
                     pet = load_pet()
                     why = f"{pet.get('kind') or 'the pet'} reached {pet.get('stage')}: its goal"
                     logger.success(f"pet: {why}")
