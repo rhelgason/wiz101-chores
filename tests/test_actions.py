@@ -1,6 +1,13 @@
 """Garden, hatch, and farm decisions that do not need the game."""
 
-from wiz101_auto.farm import is_death_heal, mob_matches, needs_heal, too_hurt_to_pull
+from wiz101_auto.farm import (
+    combo_spell,
+    is_death_heal,
+    mob_matches,
+    needs_heal,
+    next_combo,
+    too_hurt_to_pull,
+)
 from wiz101_auto.fishing import bite_ready, can_cast
 from wiz101_auto.garden import count_potatoes, count_seeds, loot_mentioned_potato, need_spell, spell_caption
 from wiz101_auto.hatch import next_hatch_click, shows_perfect_ghulture
@@ -71,3 +78,22 @@ def test_hatch_confirms_only_the_perfect_page_and_never_the_speed_button():
 def test_a_farm_mob_matches_its_name():
     assert mob_matches("Splithoof_Barbarian", ("splithoof", "barbarian"))
     assert not mob_matches("Boar", ("halfang",))
+
+
+def test_savarstaad_names_the_three_combo_cards():
+    assert combo_spell("Death Blade") == "deathblade"
+    assert combo_spell("Empower") == "empower"
+    assert combo_spell("Scarecrow Item Card") == "scarecrow"
+    assert combo_spell("Empowered") is None
+    assert combo_spell("Ghoul") is None
+
+
+def test_savarstaad_waits_for_the_next_combo_card():
+    hand = {"deathblade", "empower", "scarecrow"}
+    assert next_combo([], hand, hand) == "deathblade"
+    assert next_combo(["deathblade"], hand, hand) == "empower"
+    assert next_combo(["deathblade", "empower"], hand, hand) == "scarecrow"
+    assert next_combo([], {"empower"}, {"deathblade", "empower"}) is None
+    assert next_combo([], {"empower"}, {"empower"}) == "empower"
+    assert next_combo(["deathblade", "empower", "scarecrow"], {"scarecrow"}, hand) == "scarecrow"
+    assert next_combo([], set(), set()) is None

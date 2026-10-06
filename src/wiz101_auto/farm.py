@@ -1,17 +1,19 @@
 """One fight for seeds or gold, then back to the day plan.
 
-The mob is the one named for that farm. A healthy round casts an area hit
-from the deck that is already equipped, or a single hit, or it passes. Below
-about 60% health the round casts a death drain on an enemy first (Ghoul,
+The mob is the one named for that farm. Savarstaad casts Deathblade, then
+Empower, then Scarecrow, and passes while the next of those is not ready.
+Any other farm casts an area hit from the deck that is already equipped, or
+a single hit, or it passes. Below about 60% health, and only when that next
+card cannot be cast, the round casts a death drain on an enemy first (Ghoul,
 Wraith, Vampire, Skeletal Dragon, or a card that steals health). Sacrifice
 is not used. A defeat, or health that is already low, takes a potion or a
-health wisp and returns. The day plan sends the wizard back. Nothing here
-stops the session.
+health wisp and returns. Nothing here stops the session.
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
 
 from loguru import logger
 
@@ -33,6 +35,8 @@ PULL_BELOW = 0.35  # gather health before starting another fight
 # Death drains. Cast on an enemy; the caster is the one who is healed.
 DRAIN_NAMES = ("ghoul", "wraith", "vampire", "skeletal dragon")
 DRAIN_EFFECTS = {"steal_health", "steal_over_time"}
+# Savarstaad. Each is cast once, in order, then Scarecrow again if they live.
+COMBO = ("deathblade", "empower", "scarecrow")
 
 
 def mob_matches(name: str, needles: tuple[str, ...]) -> bool:
@@ -93,7 +97,7 @@ async def fight_one(client, target: str, controller=None) -> bool:
         if not await client.in_battle():
             logger.info("farm: the mob did not start a fight")
             return False
-        await _play(client, controller)
+        await _play(client, controller, combo=target == "seeds")
         await _note_potato(client)
         zone = ""
         try:
@@ -265,10 +269,43 @@ async def _note_potato(client) -> None:
         logger.info(f"farm: couch potatoes {state['couch_potatoes']}")
 
 
-async def _play(client, controller):
+def combo_spell(name: str) -> str | None:
+    """'Death Blade' -> deathblade. 'Empowered' is not Empower."""
+    low = (name or "").lower()
+    flat = re.sub(r"[^a-z]", "", low)
+    if "deathblade" in flat:
+        return "deathblade"
+    if "scarecrow" in flat:
+        return "scarecrow"
+    if re.search(r"\bempower\b", low):
+        return "empower"
+    return None
+
+
+def next_combo(done: list[str], castable: set[str], in_hand: set[str]) -> str | None:
+    """The next Savarstaad card, or None to pass.
+
+    A card that is in hand but not castable yet is waited on. A card that is
+    not in hand is skipped, so a missing blade still reaches Scarecrow.
+    """
+    finished = set(done)
+    for step in COMBO:
+        if step in finished:
+            continue
+        if step in castable:
+            return step
+        if step in in_hand:
+            return None
+    if "scarecrow" in castable:
+        return "scarecrow"
+    return None
+
+
+async def _play(client, controller, combo: bool = False):
     from wizwalker.combat import AoeHandler
 
     handler = AoeHandler(client)
+    done: list[str] = []
     for _ in range(ROUNDS):
         if controller:
             await controller.checkpoint()
@@ -285,7 +322,10 @@ async def _play(client, controller):
         except Exception:
             return
         try:
-            await _cast_or_pass(handler, heal=needs_heal(ratio))
+            if combo:
+                await _cast_combo(handler, done, heal=needs_heal(ratio))
+            else:
+                await _cast_or_pass(handler, heal=needs_heal(ratio))
         except Exception as exc:
             logger.info(f"farm: round failed ({exc}); passing")
             try:
@@ -293,6 +333,40 @@ async def _play(client, controller):
             except Exception:
                 return
         await asyncio.sleep(0.4)
+
+
+async def _cast_combo(handler, done: list[str], heal: bool = False) -> str:
+    """Deathblade on the wizard, Empower on the wizard, Scarecrow on the fight."""
+    cards = []
+    for card in await handler.get_cards():
+        try:
+            castable = await card.is_castable()
+            name = await _card_name(card)
+        except Exception:
+            continue
+        spell = combo_spell(name)
+        if spell:
+            cards.append((card, spell, castable))
+    in_hand = {spell for _card, spell, _ok in cards}
+    castable = {spell for _card, spell, ok in cards if ok}
+    step = next_combo(done, castable, in_hand)
+    if step is None and heal:
+        drained = await _cast_drain(handler)
+        if drained:
+            return drained
+        logger.info("farm: health is low and no death drain is in hand")
+    if step is None:
+        await handler.pass_button()
+        logger.info("farm: passing until Deathblade, Empower, or Scarecrow is ready")
+        return "pass"
+    card = next(card for card, spell, ok in cards if spell == step and ok)
+    if step == "scarecrow":
+        await card.cast(None)
+    else:
+        await card.cast(await handler.get_client_member())
+    done.append(step)
+    logger.info(f"farm: casting {step}")
+    return step
 
 
 async def _card_name(card) -> str:
@@ -332,23 +406,34 @@ async def _living_enemies(handler) -> list:
     return enemies
 
 
-async def _cast_or_pass(handler, heal: bool = False) -> str:
+async def _cast_drain(handler) -> str | None:
+    """A death drain on one living enemy, or None when none can be cast."""
     enemies = await _living_enemies(handler)
-    if heal and enemies:
-        for card in await handler.get_cards():
-            try:
-                if not await card.is_castable():
-                    continue
-                name = await _card_name(card)
-                effects = await _effect_names(card)
-            except Exception:
+    if not enemies:
+        return None
+    for card in await handler.get_cards():
+        try:
+            if not await card.is_castable():
                 continue
-            if not is_death_heal(name, effects):
-                continue
-            await card.cast(enemies[0])
-            logger.info(f"farm: health is low; casting {name or 'a death drain'}")
-            return "heal"
+            name = await _card_name(card)
+            effects = await _effect_names(card)
+        except Exception:
+            continue
+        if not is_death_heal(name, effects):
+            continue
+        await card.cast(enemies[0])
+        logger.info(f"farm: health is low; casting {name or 'a death drain'}")
+        return "heal"
+    return None
+
+
+async def _cast_or_pass(handler, heal: bool = False) -> str:
+    if heal:
+        drained = await _cast_drain(handler)
+        if drained:
+            return drained
         logger.info("farm: health is low and no death drain is in hand")
+    enemies = await _living_enemies(handler)
     aoes = await handler.get_damaging_aoes(check_enchanted=False)
     if aoes and await aoes[0].is_castable():
         await aoes[0].cast(None)

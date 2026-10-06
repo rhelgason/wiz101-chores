@@ -36,8 +36,10 @@ then takes that same door.
 
 `mode: pet` only dances. `mode: reagents` only gathers the reagent that was
 asked for. `mode: seeds` does not dance. It fights Troubled Warriors and
-Splithoof Barbarians in Savarstaad Pass until it is stopped. Health under
-the usual line uses a death drain. Mana under about a third walks to
+Splithoof Barbarians in Savarstaad Pass until it is stopped. Each round
+casts Deathblade, then Empower, then Scarecrow, and passes while the next
+of those is not ready. A death drain is used only when health is low and
+that next card cannot be cast. Mana under about a third walks to
 Northguard, takes a mana wisp, and comes back. A bag with two slots left
 goes to Elik at the Wizard City Bazaar, presses X, and opens Backpack Buddy.
 It sells only names that were not in the bag when the run started. Couch
@@ -235,7 +237,8 @@ different Wine, and pointing it at the game's bottle can upgrade the bottle
 and break the official launcher. Do not do that.
 
 The bot runs with Wizard101.app's own Wine, in that same bottle, so it and
-the game share a wineserver. `mac/run.sh` does that. It also opens the menu
+the game share a wineserver. `mac/run.sh` does that. `mac/run.sh seeds` and
+`mac/run.sh pet` pick the mode. It also opens the menu
 bar stop. The hook itself is unproven until the game is logged in and
 standing in the world: Wine on Apple Silicon is translating the game, and a
 memory hook can fail there even though a Windows process starts.

@@ -55,6 +55,20 @@ cp "$ROOT/mac/sitecustomize.py" "$(dirname "$PY")/sitecustomize.py"
 WINSRC="$("$WINE" winepath -w "$ROOT/src")"
 PTH="$(dirname "$PY")/python313._pth"
 printf 'python313.zip\n.\nimport site\n%s\n' "$WINSRC" > "$PTH"
-echo "starting the day plan in the Wizard101 bottle"
+CONFIG="config.yaml"
+MODE=""
+case "${1:-}" in
+  "" ) ;;
+  chores|pet|reagents|seeds) MODE="$1" ;;
+  *) CONFIG="$1" ;;
+esac
+if [[ -n "$MODE" ]]; then
+  echo "starting $MODE mode in the Wizard101 bottle"
+else
+  echo "starting the day plan in the Wizard101 bottle"
+fi
 echo "stop: the Wiz menu, Stop Wizard Bot.command, or: python3 -m wiz101_auto stop"
-exec "$WINE" "$PY" -m wiz101_auto run -c "${1:-config.yaml}"
+if [[ -n "$MODE" ]]; then
+  exec "$WINE" "$PY" -m wiz101_auto run -c "$CONFIG" -m "$MODE"
+fi
+exec "$WINE" "$PY" -m wiz101_auto run -c "$CONFIG"

@@ -56,8 +56,9 @@ CrossOver.app is not used for it. See PLAYBOOK.md.
 | Command | What |
 |---|---|
 | `mac/run.sh` | on this Mac: the day plan inside the Wizard101 bottle, and the menu bar stop |
+| `mac/run.sh seeds` / `mac/run.sh pet` | that mode, instead of whatever `config.yaml` says |
 | `stop` | unhook and quit, including from the Mac side |
-| `run` | the day plan (`-m pet` or `-m reagents` for one of those) |
+| `run` | the day plan (`-m pet`, `-m reagents`, or `-m seeds`) |
 | `pet [--games N]` | dance now, ahead of the plan |
 | `reagent "scrap iron"` / `reagent --clear` | gather that reagent, or go back to the tracked quest |
 | `fish` / `fish --clear` | a fishing quest is waiting, or it is done |
