@@ -5,27 +5,37 @@ chooses the next action is `src/wiz101_auto/dayplan.py`. If this file and
 that module disagree, this file is the intent and the module is what runs,
 so change them together.
 
-Energy is the green globe. It is not mana. Pets, gardening, and fishing
-spend it. It comes back slowly, and a level-up fills it. A full bar that
-sits there is wasted, so a full bar interrupts whatever else is going on.
+Energy is the green globe. It is not mana. A dance game spends it. It
+comes back slowly, and a level-up fills it. While it can pay for a game,
+that game is what runs.
 
-## Order
+## What runs until stopped
 
-1. **Ghulture.** Dance a body that can still be the perfect pet, or the base
-   up to adult. Leave 10 energy untouched if a plant is showing a need.
-2. **Garden.** Boom shrooms until gardening rank 3, then couch potatoes.
-3. **Fishing.** Only while a fishing quest is tracked or `fish` was asked.
-4. **A full bar.** If nothing above can spend it, one dance, so a level-up
-   refill does not sit there.
-5. **Hatch.** The base with the kiosk perfect ghulture. No energy. Gold at
-   least 100,000. A hatch that is ready is paid before the barn.
-6. **Red Barn Farm.** 125,000 gold, and only when that hatch would still be
-   affordable afterwards, once couch potatoes can actually be planted.
-7. **Reagents.** Only a tracked "Collect ..." quest, or `reagent "scrap iron"`.
-8. **Gold.** Whatever time is left.
+Gardening, fishing, and hatching are paused. The modules are still here.
+The day plan does not choose them.
 
-`mode: pet` does only the ghulture. `mode: reagents` does only the reagent.
-`chores` is this list. An explicit `pet` command dances immediately.
+1. **Dance.** While the globe can pay for one more game, play the dance
+   game. Feed the first snack after each win. An empty snack offer does not
+   end the trip. A talent outside the ghulture set does not end it either.
+   This keeps going past adult and past mega.
+2. **Couch potato seeds.** When the globe cannot pay, fight Splithoof
+   Barbarians in Boar Camp, Savarstaad Pass, Grizzleheim. One fight, then
+   look again. A locked zone is tried again. It is not replaced with a
+   street mob.
+3. **Gold.** More than 20 couch potatoes in the bag (seeds and harvested
+   potatoes both count) switches that farm to Halfang Bristlecrown in
+   Vestrilund. Level does not matter. A locked Wintertusk is tried again.
+
+`mode: pet` only dances. `mode: reagents` only gathers the reagent that was
+asked for. `chores` is the list above. Deaths, low health, a missed zone,
+and an empty snack pile do not stop the session. Stop is the menu bar, or
+`state/stop.request`.
+
+Health under about 60% in a fight casts a death drain on an enemy: Ghoul,
+Wraith, Vampire, Skeletal Dragon, or any other card that steals health.
+Sacrifice is not used. Those cards have to be in the equipped deck. Out of
+a fight, low health uses a potion if one is charged, then stands on a
+health wisp, then goes back to the same farm. A defeat does the same.
 
 ## 1. The ghulture
 
@@ -69,18 +79,22 @@ it is dropped and the previous base is the parent again.
 The base is remembered in `state/pet.json` under `base`, and the one before
 it under `prior_base`. `state/` is not committed.
 
-Only a ghulture is trained on purpose. Another pet equipped is left alone
-unless the energy bar is full and the garden and fishing have nothing to
-spend it on. Then one dance spends the refill. Snacks are the first one the
-reward screen offers. Couch potatoes replace those with rank 9s (Captain
-Canteloupe, Fancy Yogurt, Golden Wheat Bread). Ghultures love death
-desserts and death cereals. Fancy Yogurt is the dessert.
+The rules above are the pet we are building. They are not what the live
+loop does with energy right now. Dance games run whenever the globe can
+pay, on whatever pet is equipped, and a snack is fed after each win.
+Snacks are the first one the reward screen offers. Couch potatoes replace
+those with rank 9s (Captain Canteloupe, Fancy Yogurt, Golden Wheat Bread).
+Ghultures love death desserts and death cereals. Fancy Yogurt is the dessert.
 
-The hatch click happens only when the open kiosk page shows a ghulture and
-all five talents. A page that does not is left alone, because a wrong click
-spends the gold. Nothing is paid to speed the egg.
+Hatching is paused, so none of that gold is spent right now. When it is
+turned back on, the hatch click happens only when the open kiosk page shows
+a ghulture and all five talents. A page that does not is left alone, because
+a wrong click spends the gold. Nothing is paid to speed the egg.
 
 ## 2. Couch potatoes
+
+Paused with the rest of the garden. Seeds are still farmed, as above.
+The plant itself is not tended, and the barn is not bought.
 
 Couch potatoes are the right plant. They are free to farm, they plant at
 gardening rank 3 (Apprentice), they use a large plot, and an elder harvest
@@ -134,6 +148,8 @@ iron only. It does not realm-hop.
 
 ## 4. Fishing
 
+Paused. A fishing quest does not take energy away from the dance game.
+
 Fish when the tracked quest is a fishing quest, or when `fish` was asked.
 `fish --clear` drops the request. Pet and garden still take the energy first.
 
@@ -145,43 +161,42 @@ the day plan looks again.
 
 ## 5. Gold
 
-Gold pays for hatches, the barn, and boom shroom seeds. Farm it only when
-energy cannot pay for the pet, the garden, or a fishing quest.
+Gold is what runs when a dance game does not. The fight is one duel, then
+the plan looks again, so a refilled globe leaves for the Pet Pavilion.
 
-- Need couch potato seeds (under 14), or the wizard is under level 40:
-  Splithoof Barbarians, as above. Their junk also vendors.
-- Seeds stocked and level 40 or more: Halfang Bristlecrown in Vestrilund,
-  Wintertusk. His amulets sell at the Bazaar. That is the gold farm.
-- Under level 20: Grizzleheim is closed. There is no seed run yet.
+- 20 couch potatoes or fewer: Splithoof Barbarians. Their junk also vendors.
+- More than 20: Halfang Bristlecrown in Vestrilund, Wintertusk. His amulets
+  sell at the Bazaar. That is the faster gold farm. It is chosen even under
+  level 40. If the zone is locked, the same trip is tried again.
 
-Keep 100,000 gold back while the ghulture is unfinished. That is one hatch.
-The barn is 125,000 on top of it. When a hatch is ready and the gold covers
-the hatch but not both, the hatch is paid. The barn is bought on the next
-stretch of training, once the bank holds the barn and still leaves the
-hatch. The housing shop is not mapped, so the barn gold is not spent until that
-window has been read on a live client. The decision is made either way.
+A healthy round uses an area hit from the deck already equipped, or one
+single hit, or it passes. Under about 60% health it casts a death drain
+first. Health under about a third, or a defeat, takes a potion or a health
+wisp and then comes back. The session does not stop for either.
 
-One fight, then the day plan looks again. The pull is the named mob
-(Splithoof Barbarians, Halfang, or a Wizard City street mob under level 20).
-The round uses an area hit from the deck already equipped, or one single
-hit on an enemy, or it passes. Health under about a third skips the pull.
-A full globe is noticed between fights because the fight is only one duel.
+Keep 100,000 gold back while the ghulture is unfinished, once hatching is
+turned back on. That is one hatch. The barn is 125,000 on top of it. The
+housing shop is not mapped, so the barn gold is not spent. Hatching is
+paused, so that gold is not spent either.
 
 ## What actually runs
 
 | Action | Runs |
 |---|---|
-| Dance | Yes. The base to adult, a perfect-stat body to mega, a miss not at all. One extra game when the bar is full and nothing else can spend it. |
-| Reagent pickup | Yes, for the one reagent that was asked for. |
-| Garden | Yes. Rank and seeds are read from the wizard. A spell is cast only when the plant's text names that need. One boom shroom seed from Farley when that is the next buy. |
-| Fishing | Yes, a few casts, when a quest or `fish` asked. Space on the bite. No clock change. |
-| Hatch | Yes, one hatch, and only when the open kiosk page shows a ghulture with all five talents. No crowns and no faster egg. |
-| Gold fight | Yes, one duel against the named mob, then back to the plan. |
-| Red Barn purchase | Decided and logged. The housing shop is not clicked. |
+| Dance | Yes, while energy can pay for another game. A snack is fed after each win. A miss, an empty snack offer, and a finished goal do not end the trip. |
+| Couch potato seeds | Yes. Splithoof Barbarians, over and over, until more than 20 couch potatoes are in the bag. |
+| Gold fight | Yes, after that. Halfang, over and over. A death uses a potion or a health wisp and comes back. |
+| Reagent pickup | Only in `mode: reagents`. A chores run does not leave the farm for scrap iron. |
+| Garden | Paused. Rank and seeds are still read, so the potato count is real. No spell is cast and Farley is not visited. |
+| Fishing | Paused. |
+| Hatch | Paused. Nothing is paid to speed an egg. |
+| Red Barn purchase | Paused. The housing shop is not clicked. |
 
 `state/pet.json` remembers the equipped pet, the base, the previous base,
 and `confirm_mega`. `state/` is not committed. A missing `state/garden.json`
-is read as rank 1 with no seeds and no barn, so the garden work is boom shrooms.
+is read as no couch potatoes, so the farm starts on Splithoof. The potato
+count is the backpack total, and a reward line that names a couch potato
+seed adds one when a stack does not show up as its own slot.
 
 ## Stopping
 

@@ -4,28 +4,28 @@ A Wizard101 bot that spends the day on the tedious work. The plan is
 [PLAYBOOK.md](PLAYBOOK.md). It reads the game through
 [WizWalker](https://github.com/Deimos-Wizard101/Deimos-Wizard101).
 
-Energy (the green globe) goes to the ghulture and the garden first. A full
-bar interrupts everything else. Gold is what it does when energy cannot pay
-for those. Reagents and fishing happen when a quest asks.
+Energy (the green globe) pays for dance games. When it cannot, the bot
+farms Splithoof Barbarians in Grizzleheim for couch potato seeds. More than
+20 couch potatoes switches that to Halfang for gold. It keeps going until
+you stop it. A death uses a potion or a health wisp and goes back.
 
 | Work | What runs |
 |---|---|
-| **Ghulture** | Dance game, read from memory, to adult. A talent outside death-dealer, death-giver, pain-giver, mighty, and armor breaker stops the body. Hatching is decided and not clicked. |
-| **Garden** | Boom shrooms until rank 3, then couch potatoes. It goes home when a plant needs care. Spells are not cast blind. |
-| **Reagents** | One named reagent from the tracked quest, or `reagent "scrap iron"`. Scrap iron is the Marleybone streets. |
-| **Fishing** | Noticed when a fishing quest is tracked. The reel is not played, because a missed cast still spends the energy. |
-| **Gold** | Named (Splithoof while seeds are short, then Halfang). Fights are not started. |
+| **Dance** | The dance game, while energy can pay. The first snack is fed after each win. |
+| **Seeds** | Splithoof Barbarians, until the bag has more than 20 couch potatoes. |
+| **Gold** | Halfang after that. Death drains when health is under about 60%. |
+| **Garden, fishing, hatching** | Paused. The code is still there. |
+| **Reagents** | Only in reagent mode. |
 
 > Automation breaks KingsIsle's Terms of Use and accounts do get banned.
 > That risk is yours.
 
 ## What is not clicked
 
-Hatching, the housing shop, garden spells, the fishing reel, and gold fights
-need their windows mapped on a live Windows client. The bot decides each of
-them and will not invent the click. The other Pet Pavilion games (Cannon,
-Maze, Gobbler Drop, Grumpy Gobblers, Way of the Ninja Pig) are not played.
-Only the dance game exposes its move list.
+The barn, a hatch, a garden spell, and a fishing cast are not chosen.
+The other Pet Pavilion games (Cannon, Maze, Gobbler Drop, Grumpy Gobblers,
+Way of the Ninja Pig) are not played. Only the dance game exposes its move
+list. Death heals only work when those cards are in the equipped deck.
 
 ## Setup (Windows)
 

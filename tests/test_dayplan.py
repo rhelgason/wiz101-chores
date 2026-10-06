@@ -1,4 +1,4 @@
-"""The day plan: energy first, then the thing that was asked for, then gold."""
+"""The day plan: dance while energy can pay, then farm until stopped."""
 
 from wiz101_auto.dayplan import Snapshot, choose, fishing_quest, reagent_from_quest
 from wiz101_auto.petplan import note_equipped, pet_failed, stats_mentioned, stats_perfect, talents_mentioned
@@ -15,40 +15,37 @@ def _snap(**kw):
     return Snapshot(**base)
 
 
-def test_a_full_bar_trains_the_baby_and_holds_energy_for_a_needy_plant():
-    decision = choose(_snap(plants_need_care=True))
+def test_energy_that_can_pay_dances_and_does_not_hold_any_back_for_plants():
+    decision = choose(_snap(plants_need_care=True, fishing=True, reagent="scrap iron"))
     assert decision.action == "dance"
-    assert decision.train_until == "adult"
-    assert decision.energy_floor == 10
+    assert decision.spend
+    assert decision.games == 0
+    assert decision.energy_floor == 0
 
 
-def test_a_teen_miss_is_not_trained_on_to_adult():
+def test_a_teen_miss_still_dances_when_the_globe_can_pay():
     decision = choose(_snap(
         pet_stage="teen", manifested=("spell-proof",), energy=4,
         base_kind="ghulture", base_stage="adult",
         base_talents=("death-dealer", "pain-giver"),
         base_stats={"strength": 240, "intellect": 240, "agility": 250, "will": 250, "power": 240},
     ))
-    assert decision.action == "hatch"
-    assert "do not hatch this body" in decision.why
-    assert "kiosk" in decision.why
+    assert decision.action == "dance"
+    assert decision.spend
 
 
-def test_a_clean_adult_hatches_and_a_poor_one_goes_for_gold():
-    ready = choose(_snap(
-        pet_stage="adult", manifested=("death-dealer", "pain-giver"),
-        energy=20, energy_max=50,
+def test_an_empty_globe_farms_seeds_until_more_than_20_couch_potatoes():
+    seeds = choose(_snap(
+        pet_stage="adult", energy=0, couch_potato_seeds=14, couch_potatoes=20,
     ))
-    assert ready.action == "hatch"
-    poor = choose(_snap(
-        pet_stage="adult", manifested=("death-dealer",), gold=10_000,
-        energy=0, couch_potato_seeds=14,
-    ))
-    assert poor.action == "gold"
-    assert poor.target == "halfang"  # seeds are stocked and the wizard is past 40
+    assert seeds.action == "gold"
+    assert seeds.target == "splithoof"
+    gold = choose(_snap(pet_stage="adult", energy=0, couch_potatoes=21))
+    assert gold.action == "gold"
+    assert gold.target == "halfang"
 
 
-def test_perfect_stats_are_trained_out_and_a_worse_body_is_not():
+def test_any_body_dances_while_energy_can_pay():
     perfect = choose(_snap(
         pet_stage="adult",
         manifested=("death-dealer", "death-giver"),
@@ -56,62 +53,60 @@ def test_perfect_stats_are_trained_out_and_a_worse_body_is_not():
         energy=40, energy_max=50,
     ))
     assert perfect.action == "dance"
-    assert perfect.train_until == "mega"
-    base_stats = {"strength": 230, "intellect": 230, "agility": 240, "will": 240, "power": 230}
+    assert perfect.spend
     worse = choose(_snap(
-        pet_stage="baby", energy=20, energy_max=50,
+        pet_stage="baby", energy=0,
         stats={"strength": 200, "intellect": 200, "agility": 200, "will": 200, "power": 200},
-        base_kind="ghulture", base_stage="adult", base_stats=base_stats,
+        base_kind="ghulture", base_stage="adult",
+        base_stats={"strength": 230, "intellect": 230, "agility": 240, "will": 240, "power": 230},
         base_talents=("death-dealer",),
     ))
-    assert worse.action == "hatch"
-    assert "kiosk" in worse.why
-    closer = choose(_snap(
-        pet_stage="baby", energy=20, energy_max=50,
-        stats={"strength": 250, "intellect": 250, "agility": 250, "will": 260, "power": 250},
-        base_kind="ghulture", base_stage="adult", base_stats=base_stats,
-        base_talents=("death-dealer",),
-    ))
-    assert closer.action == "dance"
-    assert closer.train_until == "adult"
+    assert worse.action == "gold"
+    assert worse.target == "splithoof"
 
 
-def test_the_confirm_pet_is_trained_to_mega_instead_of_hatched():
+def test_a_confirm_pet_dances_instead_of_being_sent_to_hatch():
     decision = choose(_snap(pet_stage="ancient", confirm_mega=True, manifested=("death-dealer",)))
     assert decision.action == "dance"
-    assert decision.train_until == "mega"
+    assert decision.spend
 
 
-def test_couch_potatoes_wait_for_rank_and_the_barn_waits_for_them():
-    ranking = choose(_snap(pet_stage="adult", pet_kind="bloodbat", gardening_rank=1, boom_shroom_seeds=3))
-    assert ranking.action == "garden"
-    assert "boom shroom" in ranking.why
+def test_garden_fishing_and_the_barn_are_not_chosen():
+    ranking = choose(_snap(
+        pet_stage="adult", pet_kind="bloodbat", energy=0,
+        gardening_rank=1, boom_shroom_seeds=3,
+    ))
+    assert ranking.action == "gold"
+    assert ranking.target == "splithoof"
     barn = choose(_snap(
         pet_stage="mega", confirm_mega=True, energy=0,
         manifested=("death-dealer", "death-giver", "pain-giver", "mighty", "armor-breaker"),
         gardening_rank=3, couch_potato_seeds=2, gold=130_000,
     ))
-    assert barn.action == "buy_barn"
+    assert barn.action == "gold"
 
 
-def test_scrap_iron_is_gathered_only_when_energy_has_nothing_to_do():
+def test_chores_farms_when_energy_is_gone_even_if_a_reagent_was_asked():
     busy = choose(_snap(reagent="scrap iron"))
     assert busy.action == "dance"
-    # The barn is already owned. At rank 3 and 250,000 gold it would be bought first.
     idle = choose(_snap(
         pet_stage="adult", pet_kind="bloodbat", energy=0,
         reagent="scrap iron", red_barn=True,
     ))
-    assert idle.action == "reagent"
-    assert idle.target == "scrap iron"
+    assert idle.action == "gold"
+    assert idle.target == "splithoof"
+    asked = choose(_snap(mode="reagents", reagent="scrap iron", energy=0))
+    assert asked.action == "reagent"
+    assert asked.target == "scrap iron"
 
 
-def test_a_full_bar_is_spent_when_nothing_else_can_use_it():
+def test_a_full_bar_keeps_dancing_past_one_game():
     decision = choose(_snap(
         pet_kind="bloodbat", pet_stage="adult", energy=50, energy_max=50, red_barn=True,
     ))
     assert decision.action == "dance"
-    assert decision.games == 1
+    assert decision.spend
+    assert decision.games == 0
 
 
 def test_a_miss_drops_back_to_the_previous_base():
@@ -133,20 +128,25 @@ def test_a_miss_drops_back_to_the_previous_base():
     assert reverted["base"]["stats"]["strength"] == 230
 
 
-def test_fishing_loses_to_the_pet_and_runs_when_the_garden_is_idle():
+def test_fishing_does_not_run_and_a_payable_globe_still_dances():
     assert choose(_snap(fishing=True)).action == "dance"
     idle = choose(_snap(
         pet_stage="adult", pet_kind="bloodbat", fishing=True,
         gardening_rank=3, couch_potato_seeds=0, energy=8,
     ))
-    assert idle.action == "fish"
+    # Adult dance costs 6, so 8 still pays for a game.
+    assert idle.action == "dance"
+    assert idle.spend
 
 
-def test_seeds_come_before_halfang_and_an_unread_bar_does_not_start_a_fight():
-    low = _snap(level=25, couch_potato_seeds=0, pet_kind="bloodbat", energy=0, gardening_rank=1)
+def test_seeds_stay_splithoof_under_the_level_gate_and_an_unread_bar_still_farms():
+    low = _snap(level=10, couch_potato_seeds=0, pet_kind="bloodbat", energy=0, gardening_rank=1)
     assert choose(low).target == "splithoof"
     unread = _snap(energy=None, pet_kind="bloodbat", red_barn=True)
-    assert choose(unread).action == "wait"
+    assert choose(unread).action == "gold"
+    assert choose(unread).target == "splithoof"
+    pet_only = choose(_snap(mode="pet", energy=0))
+    assert pet_only.action == "wait"
 
 
 def test_quest_text_picks_a_reagent_and_a_fishing_goal():

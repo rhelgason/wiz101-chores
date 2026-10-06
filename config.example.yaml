@@ -3,7 +3,7 @@ mode: chores                 # chores | pet | reagents
 log_file: wiz101-auto.log
 
 pet:
-  auto: true                 # the day plan may train the equipped ghulture
+  auto: true                 # chores dances while energy can pay, then farms
   feed: true
   default_goal: adult        # baby, teen, adult, ancient, epic, mega, ultra
   goals: {}                  # override default_goal for one pet kind

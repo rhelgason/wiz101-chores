@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 
 from loguru import logger
@@ -35,6 +36,7 @@ def garden_state() -> dict:
         "rank": 1,
         "red_barn": False,
         "couch_potato_seeds": 0,
+        "couch_potatoes": 0,
         "boom_shroom_seeds": 0,
         "plants_need_care": False,
     }
@@ -69,6 +71,53 @@ def count_seeds(names) -> tuple[int, int]:
     return couch, boom
 
 
+_STACK = re.compile(r"(?:x|×)\s*(\d+)\s*$", re.I)
+
+
+def is_couch_potato(name: str) -> bool:
+    """A couch potato seed or a harvested couch potato. Not a boom shroom."""
+    low = (name or "").lower().replace("_", " ")
+    return "couch potato" in low or "couchpotato" in low.replace(" ", "")
+
+
+def potatoes_in(name: str, quantity: int | None = None) -> int:
+    """How many couch potatoes this one backpack entry is. Zero for anything else."""
+    if not is_couch_potato(name):
+        return 0
+    if quantity is not None and quantity > 0:
+        return int(quantity)
+    match = _STACK.search((name or "").strip())
+    if match:
+        return int(match.group(1))
+    return 1
+
+
+def count_potatoes(items) -> int:
+    """Couch potatoes in the bag. An entry is a name, or (name, stack size).
+
+    Seeds and snacks both count. A stack size is used when the caller has one.
+    """
+    total = 0
+    for item in items:
+        if isinstance(item, tuple):
+            total += potatoes_in(item[0], item[1] if len(item) > 1 else None)
+        else:
+            total += potatoes_in(str(item))
+    return total
+
+
+def loot_mentioned_potato(texts) -> bool:
+    """A short reward line naming a couch potato seed. Quest text does not count."""
+    for text in texts:
+        low = (text or "").lower().replace("_", " ")
+        if "couch potato" not in low or "seed" not in low or len(text) > 60:
+            continue
+        if any(word in low for word in ("collect", "quest", "objective")):
+            continue
+        return True
+    return False
+
+
 def need_spell(texts) -> str | None:
     """The spell word a plant is asking for, or None when no need is written."""
     blob = " ".join(texts).lower()
@@ -94,11 +143,15 @@ async def note_live(client) -> dict:
     rank = await _rank(client)
     if rank is not None:
         state["rank"] = rank
-    names = await _item_names(client)
-    if names is not None:
+    stacks = await _item_stacks(client)
+    if stacks is not None:
+        names = [name for name, _qty in stacks]
         couch, boom = count_seeds(names)
         state["couch_potato_seeds"] = couch
         state["boom_shroom_seeds"] = boom
+        # A stack that reads as one slot must not wipe a higher count already seen.
+        counted = count_potatoes(stacks)
+        state["couch_potatoes"] = max(counted, int(state.get("couch_potatoes") or 0))
     save_garden(state)
     return state
 
@@ -178,19 +231,49 @@ async def _rank(client) -> int | None:
     return min(level, 15)
 
 
-async def _item_names(client) -> list[str] | None:
+async def _item_stacks(client) -> list[tuple[str, int | None]] | None:
+    """Backpack entries as (object name, stack size). None when the bag cannot be read.
+
+    Stack size is set only when a behavior is named as a stack or a quantity.
+    Otherwise the entry counts as one, and a later reward line can add the rest.
+    """
     try:
         inventory = await client.client_object.try_get_inventory_behavior()
         if inventory is None:
             return None
-        names = []
+        stacks = []
         for item in await inventory.item_list():
             template = await item.object_template()
-            names.append((await template.object_name() or "") if template else "")
-        return names
+            name = (await template.object_name() or "") if template else ""
+            stacks.append((name, await _stack_size(item)))
+        return stacks
     except Exception as exc:
         logger.debug(f"garden: backpack unreadable ({exc})")
         return None
+
+
+async def _stack_size(item) -> int | None:
+    try:
+        behaviors = await item.inactive_behaviors()
+    except Exception:
+        return None
+    from wizwalker.constants import Primitive
+
+    for behavior in behaviors:
+        try:
+            bname = (await behavior.behavior_name() or "").lower()
+        except Exception:
+            continue
+        if "stack" not in bname and "quantity" not in bname:
+            continue
+        for offset in (112, 120, 128, 132, 72):
+            try:
+                value = int(await behavior.read_value_from_offset(offset, Primitive.uint32))
+            except Exception:
+                continue
+            if 1 <= value <= 999:
+                return value
+    return None
 
 
 async def _plant_spots(client) -> list:

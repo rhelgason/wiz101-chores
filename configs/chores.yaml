@@ -3,8 +3,8 @@
 #
 #   wiz101-auto run -c config.yaml
 #
-# mode: chores    spend energy on the ghulture and the garden, gold after that
-#       pet       only the ghulture (dance, then hatch when it is ready)
+# mode: chores    dance while energy can pay, then Splithoof seeds (Halfang after 20 couch potatoes)
+#       pet       only the dance game
 #       reagents  only the reagent that was asked for
 mode: chores
 

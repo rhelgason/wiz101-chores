@@ -225,7 +225,7 @@ def _click_left_of_center(client):
 
 
 async def chore_loop(client, cfg: Config, controller: Controller, task: dict):
-    """The day plan: spend energy on the ghulture and the garden, then gold."""
+    """Dance while energy can pay, then farm until the wizard is stopped."""
     from .dayplan import choose
     from .duty import carry_out, look
     from .petdance import PET_REQUEST, games_requested
@@ -296,7 +296,7 @@ async def run(cfg: Config):
     controller = Controller(s.stop_key, s.pause_key, s.max_hours)
     doing = []
     if cfg.pet.auto:
-        doing.append("ghulture dance while that body can still be perfect")
+        doing.append("dance while energy can pay, then Splithoof seeds (Halfang after 20 couch potatoes)")
     if cfg.reagents.enabled:
         doing.append(f"reagent sweeps ({cfg.reagents.hop_zones} gate(s) out)")
     logger.info(f"mode={cfg.mode}: {', '.join(doing) or 'nothing enabled'}. "

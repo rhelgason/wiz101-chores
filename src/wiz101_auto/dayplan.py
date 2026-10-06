@@ -1,9 +1,9 @@
 """What the bot should do next. Pure: no game client and no files.
 
-Energy (the green globe) is the scarce resource. It refills slowly and jumps
-to full on a level-up, and a full bar that sits there is wasted. Pet training
-and garden care spend it. Fishing spends it only while a fishing quest is
-tracked. Gold and reagent runs happen when energy cannot pay for any of those.
+The live loop dances while the green globe can pay for a game, then farms
+until the wizard is stopped. Splithoof Barbarians drop couch potato seeds.
+More than 20 couch potatoes switches that farm to Halfang. Garden, fishing,
+and hatching stay in the module for later and are not chosen.
 
 The reasons are the ones in PLAYBOOK.md.
 """
@@ -34,6 +34,8 @@ SEED_STOCK = 14  # a first couch-potato plot; a 69-plot comes after this works
 CP_RANK = 3  # couch potatoes plant at Apprentice
 HALFANG_LEVEL = 40  # Wintertusk gold boss, once seeds are stocked
 GRIZZLEHEIM_LEVEL = 20
+# More than this many couch potatoes (seeds or snacks) switches the live farm to Halfang.
+POTATO_SWITCH = 20
 
 # Display names. The gatherer resolves these through the zone list at runtime.
 REAGENT_PLACES = {
@@ -63,6 +65,7 @@ class Snapshot:
     gardening_rank: int = 1
     red_barn: bool = False
     couch_potato_seeds: int = 0
+    couch_potatoes: int = 0  # seeds and harvested potatoes, stacks included
     boom_shroom_seeds: int = 0
     plants_need_care: bool = False
     reagent: str | None = None  # asked for, or read off the tracked quest
@@ -84,6 +87,7 @@ class Decision:
     energy_floor: int = 0
     target: str = ""  # reagent name, or a key in FARMS
     games: int = 0  # dance this many times; 0 keeps going until the training goal
+    spend: bool = False  # play while energy can pay, past the training goal and a talent miss
 
 
 def dance_cost(stage: str | None) -> int:
@@ -170,13 +174,13 @@ def garden_reason(snap: Snapshot) -> str | None:
 
 
 def farm_for(snap: Snapshot) -> str:
-    """Which gold run, once energy has nothing left to spend on."""
-    need_seeds = snap.couch_potato_seeds < SEED_STOCK
-    if snap.level is not None and snap.level < GRIZZLEHEIM_LEVEL and need_seeds:
-        return "early-gold"
-    if need_seeds or snap.level is None or snap.level < HALFANG_LEVEL:
-        return "splithoof"
-    return "halfang"
+    """Splithoof for seeds. Halfang once the bag holds more than 20 couch potatoes.
+
+    Level does not change the target. A locked zone is retried, not replaced.
+    """
+    if snap.couch_potatoes > POTATO_SWITCH:
+        return "halfang"
+    return "splithoof"
 
 
 def _bar_is_full(snap: Snapshot) -> bool:
@@ -214,8 +218,24 @@ def barn_ready(snap: Snapshot) -> bool:
     return snap.gold >= BARN_GOLD + reserve
 
 
+def _farm_decision(snap: Snapshot) -> Decision:
+    target = farm_for(snap)
+    held = snap.couch_potatoes
+    if target == "halfang":
+        why = f"{held} couch potatoes is past {POTATO_SWITCH}; Halfang until stopped"
+    elif snap.energy is None:
+        why = f"{held} couch potatoes; energy was unread, so Splithoof seeds until it can be read"
+    else:
+        why = f"{held} couch potatoes; the globe cannot pay for a dance, so Splithoof seeds until stopped"
+    return Decision("gold", why, target=target)
+
+
 def choose(snap: Snapshot) -> Decision:
-    """The next thing to do. One action; the loop asks again when it finishes."""
+    """The next thing to do. One action; the loop asks again when it finishes.
+
+    Gardening, fishing, and hatching are not chosen. Reagent mode still gathers
+    only what it was asked for. Anything else dances, then farms, until stopped.
+    """
     if snap.mode == "reagents":
         return Decision(
             "reagent",
@@ -223,60 +243,14 @@ def choose(snap: Snapshot) -> Decision:
             target=snap.reagent or "",
         )
 
-    floor = GARDEN_RESERVE if snap.plants_need_care else 0
-    train = needs_training(snap)
-    if train and _can_dance(snap, floor):
-        held = f", holding {floor} energy for a plant" if floor else ""
+    if _can_dance(snap, 0):
         return Decision(
             "dance",
-            f"train the ghulture to {train}{held}",
-            train_until=train,
-            energy_floor=floor,
+            "dance while the globe can pay, feed a snack after each win, then farm",
+            games=0,
+            spend=True,
         )
-
-    if snap.mode != "pet":
-        garden = garden_reason(snap)
-        if garden and snap.energy is not None and snap.energy >= 1:
-            return Decision("garden", garden)
-        if snap.fishing and snap.energy is not None and snap.energy >= 1:
-            return Decision(
-                "fish",
-                "a fishing quest is tracked, and pet and garden are not waiting on energy",
-            )
-
-    if _bar_is_full(snap):
-        return Decision(
-            "dance",
-            "energy is full, and the pet, the garden, and fishing cannot use it; one dance spends it",
-            games=1,
-        )
-
-    hatch = hatch_reason(snap)
-    if hatch:
-        if _can_hatch(snap):
-            return Decision("hatch", hatch)
-        return Decision(
-            "gold",
-            f"the pet is ready to hatch and gold is under {HATCH_RESERVE:,}",
-            target=farm_for(snap),
-        )
-
-    if snap.mode == "chores" and barn_ready(snap):
-        return Decision(
-            "buy_barn",
-            f"gold covers the Red Barn Farm ({BARN_GOLD:,}) with the hatch reserve left over",
-        )
-
-    if snap.mode != "pet" and snap.reagent:
-        return Decision("reagent", f"asked for {snap.reagent}", target=snap.reagent)
 
     if snap.mode == "pet":
-        return Decision("wait", "pet mode: nothing to train or hatch right now")
-    if snap.energy is None:
-        return Decision("wait", "energy could not be read; not starting a gold run while it might be full")
-
-    farm = farm_for(snap)
-    why = "energy cannot pay for the pet, the garden, or a fishing quest"
-    if (snap.pet_kind or "").lower() not in ("", "ghulture"):
-        why = f"the equipped pet is a {snap.pet_kind}, not the ghulture, so its training waits; {why}"
-    return Decision("gold", why, target=farm)
+        return Decision("wait", "pet mode: energy cannot pay for another dance")
+    return _farm_decision(snap)

@@ -1,9 +1,8 @@
 """Read the wizard and carry out one decision from `dayplan`.
 
-Dance, a reagent sweep, a garden visit, a fishing cast, one kiosk hatch, and
-one farm fight all run. A hatch click waits until the open page shows the
-perfect ghulture. A garden spell waits until the plant names the need. The
-barn shop is still not clicked.
+The live plan dances while energy can pay, feeding a snack after each win,
+then farms. Garden, fishing, and hatch still run if a decision names them.
+The day plan does not name them. The barn shop is still not clicked.
 """
 
 from __future__ import annotations
@@ -92,6 +91,7 @@ async def look(client, cfg, dancer) -> Snapshot:
         gardening_rank=int(garden["rank"]),
         red_barn=bool(garden["red_barn"]),
         couch_potato_seeds=int(garden["couch_potato_seeds"]),
+        couch_potatoes=int(garden.get("couch_potatoes") or 0),
         boom_shroom_seeds=int(garden["boom_shroom_seeds"]),
         plants_need_care=bool(garden["plants_need_care"]),
         reagent=asked if asked else (reagent_from_quest(goal) if cfg.reagents.enabled else None),
@@ -108,13 +108,17 @@ async def look(client, cfg, dancer) -> Snapshot:
 async def carry_out(decision: Decision, client, dancer, gatherer) -> None:
     """Do `decision`. Returns when that attempt is over (a dance trip, one sweep, or a wait)."""
     if decision.action == "dance":
-        if decision.games <= 0:
+        # The live loop feeds after every win and keeps playing past a miss.
+        if decision.spend:
+            dancer.feed = True
+        elif decision.games <= 0:
             dancer.cfg.goals["ghulture"] = decision.train_until or "adult"
             dancer.cfg.default_goal = decision.train_until or "adult"
         await dancer.trip(
             decision.games,
             energy_floor=decision.energy_floor,
-            past_goal=decision.games > 0,
+            past_goal=decision.spend or decision.games > 0,
+            keep_on_miss=decision.spend,
         )
         return
     if decision.action == "reagent":

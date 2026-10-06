@@ -337,7 +337,14 @@ class PetDancer:
             save_pet(pet)
             logger.info(f"pet: {pet.get('kind') or 'the pet'} is {pet.get('stage') or '?'}")
 
-    async def trip(self, wanted: int, energy_floor: int = 0, *, past_goal: bool = False):
+    async def trip(
+        self,
+        wanted: int,
+        energy_floor: int = 0,
+        *,
+        past_goal: bool = False,
+        keep_on_miss: bool = False,
+    ):
         start = await self.client.zone_name() or ""
         resumed = in_pet_game(start)
         if resumed:
@@ -348,22 +355,34 @@ class PetDancer:
                 logger.warning("pet: could not reach the Pet Pavilion")
                 return
         games, why = 0, "done"
+        snack_logged = False
         await activate_dance_hook(self.client.hook_handler)
         await asyncio.sleep(HOOK_SETTLE)
         try:
             limit = wanted or MAX_GAMES
             while games < limit:
                 if self.controller:
+                    await self.controller.checkpoint()
                     self.controller.allow_idle(GAME_IDLE_SECONDS)
                 result = await self.play_one(energy_floor)
-                if result != "won":
+                if result == "no snacks":
+                    # The game was won. The snack click stays armed for the next one.
+                    games += 1
+                    why = "no snacks"
+                    if not snack_logged:
+                        logger.info("pet: no snack was offered; playing on, and the next win will try again")
+                        snack_logged = True
+                elif result != "won":
                     why = result
                     break
-                games += 1
-                logger.success(f"pet: dance game {games} won")
+                else:
+                    games += 1
+                    snack_logged = False
+                    why = "done"
+                    logger.success(f"pet: dance game {games} won")
                 from .petplan import pet_failed
 
-                if pet_failed(load_pet().get("talents") or []):
+                if pet_failed(load_pet().get("talents") or []) and not (past_goal or keep_on_miss):
                     why = "a talent outside the ghulture set manifested; stopping"
                     logger.info(f"pet: {why}")
                     break

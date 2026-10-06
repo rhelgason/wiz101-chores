@@ -1,8 +1,8 @@
 """Garden, hatch, and farm decisions that do not need the game."""
 
-from wiz101_auto.farm import mob_matches
+from wiz101_auto.farm import is_death_heal, mob_matches, needs_heal, too_hurt_to_pull
 from wiz101_auto.fishing import bite_ready, can_cast
-from wiz101_auto.garden import count_seeds, need_spell, spell_caption
+from wiz101_auto.garden import count_potatoes, count_seeds, loot_mentioned_potato, need_spell, spell_caption
 from wiz101_auto.hatch import next_hatch_click, shows_perfect_ghulture
 
 PERFECT = [
@@ -29,6 +29,28 @@ def test_a_bite_is_the_hooked_fish_and_a_low_globe_does_not_cast():
 def test_seeds_are_counted_and_snacks_are_not():
     assert count_seeds(["Couch Potato Seed", "Boom Shroom Seed", "Couch Potato"]) == (1, 1)
     assert count_seeds(["Seed_CouchPotato", "Fancy Yogurt"]) == (1, 0)
+
+
+def test_couch_potatoes_include_stacks_and_snacks_and_switch_past_20():
+    assert count_potatoes(["Couch Potato Seed", "Fancy Yogurt"]) == 1
+    assert count_potatoes([("Couch Potato Seed", 21), "Couch Potato"]) == 22
+    assert count_potatoes(["Seed_CouchPotato x20"]) == 20
+    assert loot_mentioned_potato(["Couch Potato Seed"])
+    assert not loot_mentioned_potato(["Collect Couch Potato Seeds in Grizzleheim"])
+    assert not loot_mentioned_potato(["Couch Potato"])
+
+
+def test_a_death_drain_is_a_heal_and_sacrifice_is_not():
+    assert is_death_heal("Ghoul")
+    assert is_death_heal("Vampire", ["steal_health"])
+    assert is_death_heal("Treasure", ["SpellEffects.steal_health"])
+    assert not is_death_heal("Sacrifice", ["steal_health"])
+    assert not is_death_heal("Scarecrow")
+    assert needs_heal(0.59)
+    assert not needs_heal(0.60)
+    assert not needs_heal(None)
+    assert too_hurt_to_pull(0.2)
+    assert not too_hurt_to_pull(None)
 
 
 def test_a_plant_need_picks_the_short_spell_caption():
