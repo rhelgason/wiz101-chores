@@ -50,8 +50,11 @@ fi
 cd "$ROOT"
 # Wine 8 aborts on CopyFile2. This file makes shutil use a normal copy.
 cp "$ROOT/mac/sitecustomize.py" "$(dirname "$PY")/sitecustomize.py"
+# The embeddable Python ignores PYTHONPATH while python313._pth exists.
+# That file is the module path. Point it at this checkout on every start.
 WINSRC="$("$WINE" winepath -w "$ROOT/src")"
-export PYTHONPATH="$WINSRC"
+PTH="$(dirname "$PY")/python313._pth"
+printf 'python313.zip\n.\nimport site\n%s\n' "$WINSRC" > "$PTH"
 echo "starting the day plan in the Wizard101 bottle"
 echo "stop: the Wiz menu, Stop Wizard Bot.command, or: python3 -m wiz101_auto stop"
 exec "$WINE" "$PY" -m wiz101_auto run -c "${1:-config.yaml}"
