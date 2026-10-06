@@ -114,16 +114,9 @@ class Controller:
         return not self._resume.is_set()
 
     def record_death(self, zone: str = ""):
-        from . import lifetime
-        from .questlist import world_of_zone
-
-        lifetime.load()  # seed the totals from the log before this death is logged
         self.deaths += 1
         self.last_death = (time.monotonic(), zone)
-        total = lifetime.add_death(world_of_zone(zone))
-        # Deaths never stop the bot: losing fights is handled per objective
-        # (setbacks puts a quest aside and the bot levels up elsewhere).
-        logger.warning(f"wizard defeated ({self.deaths} this session, {total} in all)")
+        logger.warning(f"wizard defeated ({self.deaths} this session) in {zone or '?'}")
 
     async def checkpoint(self):
         """Await between actions: blocks while paused, raises when stopped."""
@@ -142,15 +135,14 @@ class Controller:
                 self.stop("stop requested from the terminal")
                 break
             if ticks % 10 == 0:
-                from .control import PAUSE_REQUEST
-
-                if PAUSE_REQUEST.exists():  # the control page's pause / resume button
-                    PAUSE_REQUEST.unlink(missing_ok=True)
+                pause_request = STOP_FILE.parent / "pause.request"
+                if pause_request.exists():
+                    pause_request.unlink(missing_ok=True)
                     if self.paused:
-                        logger.info("resumed (control page)")
+                        logger.info("resumed (pause.request)")
                         self._resume.set()
                     else:
-                        logger.info("paused from the control page (press again to resume)")
+                        logger.info("paused (pause.request; press the pause key to resume)")
                         self._resume.clear()
             if _combo_down(self.stop_keys):
                 # Also the terminal's stop request: the supervisor then doesn't

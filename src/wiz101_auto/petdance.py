@@ -3,7 +3,7 @@
 `pet [--games N]` asks the running bot to go to the Pet Pavilion in Wizard
 City at its next free moment, play the dance game on the Wizard City track
 until the pet is out of energy (or N games), feed the first snack offered
-after each win, then Recall back to where it was and go on questing.
+after each win, then walk back to the zone it left.
 
 The dance moves come straight from memory: a hook on the code that reads
 the pet's dance sequence (from Deimos, github.com/Deimos-Wizard101,
@@ -21,22 +21,28 @@ import time
 from pathlib import Path
 
 from loguru import logger
-from wizwalker import XYZ, Keycode
-from wizwalker.memory import HookHandler, SimpleHook
+
+try:
+    from wizwalker import XYZ, Keycode
+    from wizwalker.memory import HookHandler, SimpleHook
+except ImportError:  # the dance hook only exists on Windows, next to the game
+    XYZ = Keycode = HookHandler = None
+
+    class SimpleHook:  # type: ignore[no-redef]
+        pass
 
 from . import ui
-from .upkeep import is_free, wait_for_loading
+from .world import is_free, wait_for_loading
 
 PET_REQUEST = Path("state") / "pet.request"  # `pet`: games to play ("0": until the energy runs out)
 PET_PARK = "WizardCity/WC_Streets/Interiors/WC_PET_Park"
 GAME_IDLE_SECONDS = 180.0  # a dance game and its rewards: no watchdog recovery meanwhile
-DANCE_SIGIL = XYZ(-4450.58, -994.90, -8.04)  # the dance game's sigil in the Pet Pavilion
+DANCE_SIGIL = XYZ(-4450.58, -994.90, -8.04) if XYZ else None  # the dance game's sigil in the Pet Pavilion
 DANCE_TITLE = "Dance Game"  # the sigil's prompt title
 NPC_TITLE = ["WorldView", "NPCRangeWin", "wndTitleBackground", "NPCRangeTxtTitle"]
 MOVES = str.maketrans("abcd", "WDSA")
 ROUNDS = 5  # rounds in a dance game
 HOOK_SETTLE = 5.0  # the hook misses turns when a game starts right after it's placed
-QUEST_FIRST_MAX = 1800.0  # energy full: the quest it's on finished first, waited for at most this long
 MAX_GAMES = 200  # a ceiling for "until the energy runs out"
 WM_KEYDOWN, WM_KEYUP = 0x100, 0x101
 
@@ -238,21 +244,18 @@ def in_pet_game(zone: str) -> bool:
 
 
 class PetDancer:
-    """Pet trips from inside the bot (the one process hooked in): a `pet`
-    request, or (cfg.auto) whenever the wizard's energy is full, until the
-    pet reaches its goal stage."""
+    """Pet trips: a `pet` request, or (cfg.auto) whenever energy is full, until
+    the pet reaches its goal stage. Then it walks back to the zone it left."""
 
-    def __init__(self, quester, cfg=None):
+    def __init__(self, client, cfg=None, controller=None):
         from .config import PetConfig
 
-        self.q = quester
-        self.client = quester.client
+        self.client = client
+        self.controller = controller
         self.cfg = cfg or PetConfig()
         self.feed = self.cfg.feed
         self._next_check = 0.0
         self._dumped: set[str] = set()
-        self._wait_quest: str | None = None  # energy full: the quest to finish first
-        self._wait_since = 0.0
 
     def done(self) -> bool:
         pet = load_pet()
@@ -283,20 +286,7 @@ class PetDancer:
             return False
         now, most = await self.energy()
         if now is None or not most or now < most:
-            self._wait_quest = None
             return False
-        # The player: finish the quest it's on first, then the pet (at most
-        # QUEST_FIRST_MAX: a stuck quest doesn't keep the pet waiting).
-        if self._wait_quest is None:
-            self._wait_quest = getattr(self.q, "_active_quest", None) or ""
-            self._wait_since = time.monotonic()
-            if self._wait_quest:
-                logger.info(f"pet: energy full ({now}/{most}): the dance game after {self._wait_quest!r}")
-        open_now = {q.name for q in getattr(self.q, "_last_quests", []) or []}
-        if (self._wait_quest and self._wait_quest in open_now
-                and time.monotonic() - self._wait_since < QUEST_FIRST_MAX):
-            return False
-        self._wait_quest = None
         pet = load_pet()
         what = f"{pet.get('kind') or 'pet'} {pet.get('stage') or ''}".strip()
         logger.info(f"pet: energy full ({now}/{most}): off to the dance game ({what})")
@@ -335,29 +325,20 @@ class PetDancer:
         start = await self.client.zone_name() or ""
         resumed = in_pet_game(start)
         if resumed:
-            # Back in a game already (a restart mid-dance): play on from here,
-            # then back to the mark the trip made (the player: it sat stuck in
-            # the dance game after a restart).
             logger.info("pet: in the dance game already: playing on")
-            marked = bool(self.q._mark)
         elif start != PET_PARK:
-            marked = await self.q._mark_here("travel", require_clear=False)
-            note = " (marked here)" if marked else ""
-            logger.info(f"pet: going to the Pet Pavilion for the dance game{note}")
+            logger.info("pet: going to the Pet Pavilion for the dance game")
             if not await self._go_to_pavilion():
                 logger.warning("pet: could not reach the Pet Pavilion")
                 return
-        else:
-            marked = False
         games, why = 0, "done"
         await activate_dance_hook(self.client.hook_handler)
         await asyncio.sleep(HOOK_SETTLE)
         try:
             limit = wanted or MAX_GAMES
             while games < limit:
-                # A game stands still for the watchdog (no quest progress): it
-                # cancelled one mid-dance and hopped the wizard away.
-                self.q.controller.allow_idle(GAME_IDLE_SECONDS)
+                if self.controller:
+                    self.controller.allow_idle(GAME_IDLE_SECONDS)
                 result = await self.play_one()
                 if result != "won":
                     why = result
@@ -370,23 +351,23 @@ class PetDancer:
                     logger.success(f"pet: {why}")
                     break
         finally:
-            self.q.controller.end_idle()
+            if self.controller:
+                self.controller.end_idle()
             await self._close_all()
             await deactivate_dance_hook(self.client.hook_handler)
         logger.info(f"pet: {games} game(s) played; stopped: {why}")
-        if marked and self.q._mark and await is_free(self.client):
-            await self.q._recall(self.q._mark.zone)
+        if not resumed and start and start != PET_PARK and await is_free(self.client):
+            from .travel import go_to_zone
+
+            if not await go_to_zone(self.client, start):
+                logger.info(f"pet: no gate path back to {start}; staying here")
 
     async def _go_to_pavilion(self) -> bool:
-        from .trainer import home_to_ravenwood
+        from .travel import go_to_zone, reach_wizard_city
 
-        zone = await self.client.zone_name() or ""
-        # Another world, or a Wizard City room no gate leads out of: Go Home,
-        # out of the dorm into Ravenwood; then the gates (Commons, Pavilion).
-        if not zone.startswith("WizardCity/") or "/interiors/" in zone.lower():
-            if not await home_to_ravenwood(self.q):
-                return False
-        await self.q.go_to_zone(PET_PARK)
+        if not await reach_wizard_city(self.client):
+            return False
+        await go_to_zone(self.client, PET_PARK)
         await wait_for_loading(self.client)
         return await self.client.zone_name() == PET_PARK
 

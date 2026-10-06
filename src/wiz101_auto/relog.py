@@ -21,7 +21,7 @@ from loguru import logger
 from wizwalker import Keycode
 
 from . import ui
-from .upkeep import wait_for_loading
+from .world import wait_for_loading
 
 QUIT_WORDS = ("quit",)
 CONFIRM_WORDS = ("yes", "ok", "quit")
@@ -89,6 +89,21 @@ async def relog(client) -> bool:
         return await _relog(client)
     finally:
         client._relogging_until = 0.0
+
+
+async def reconnect_if_asked(client) -> bool:
+    """A lost-connection box with Reconnect: press it. True if it did."""
+    try:
+        button = await _find_button(client.root_window, ("reconnect",))
+    except Exception:
+        return False
+    if button is None:
+        return False
+    logger.warning("the game lost its connection: pressing Reconnect")
+    await ui.click_center(client, button)
+    await asyncio.sleep(5.0)
+    await wait_for_loading(client)
+    return True
 
 
 async def at_character_select(client) -> bool:

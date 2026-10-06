@@ -1,0 +1,24 @@
+# Chore bot. Copy to config.yaml (wiz101.bat does this the first time).
+#
+#   wiz101-auto run -c config.yaml
+#
+# mode: chores   pet dance when energy is full, and reagent pickup the rest of the time
+#       pet      only the dance game
+#       reagents only reagent and chest pickup
+mode: chores
+
+pet:
+  auto: true
+  feed: true                 # feed the first snack after each win
+  default_goal: mega         # stop once the pet reaches this stage
+  goals: {}                  # per pet kind, lower case, e.g. {bloodbat: adult}
+
+reagents:
+  enabled: true
+  hop_zones: 1               # also sweep zones this many gates away (0 = this zone only)
+
+safety:
+  stop_key: ctrl+shift+q
+  pause_key: ctrl+shift+p
+  max_hours: 0               # 0 = run until stopped
+  mouseless: true            # clicks without moving your real mouse

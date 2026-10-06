@@ -97,7 +97,7 @@ async def _wait(seconds: float, client) -> bool:
 async def _dance_forever(client):
     from . import petdance
 
-    dancer = petdance.PetDancer(_NoQuester(client))
+    dancer = petdance.PetDancer(client)
     fails = 0
     while not STOP_FILE.exists():
         zone = await client.zone_name() or ""
@@ -136,17 +136,6 @@ async def _dance_forever(client):
             wait = RETRY_WAIT
         if not await _wait(wait, client):
             return
-
-
-class _NoQuester:
-    """PetDancer's quester: no travel (the wizard stays in the Pavilion)."""
-
-    def __init__(self, client):
-        self.client = client
-        self._mark = None
-
-    async def _mark_here(self, *_a, **_k):
-        return False
 
 
 async def run(want_pid: int = 0) -> int:

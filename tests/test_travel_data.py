@@ -1,3 +1,5 @@
+import pytest
+
 from wiz101_auto.travel_data import find_gate, named_zone, parse_display_zones, parse_gates, parse_spots
 
 GATES_TEXT = """WORLD - WizardCity
@@ -93,6 +95,7 @@ def test_find_gate_routes_around_blocked_gates():
 
 
 def test_gate_behind_is_opposite_the_facing_direction():
+    pytest.importorskip("wizwalker")
     from wizwalker import XYZ
     from wizwalker.utils import calculate_perfect_yaw
 
@@ -105,6 +108,7 @@ def test_gate_behind_is_opposite_the_facing_direction():
 
 
 def test_add_gate_keeps_known_gates():
+    pytest.importorskip("wizwalker")
     from wizwalker import XYZ
 
     from wiz101_auto.travel_data import add_gate, first_hop_toward
@@ -145,29 +149,6 @@ def test_zones_around_skips_interiors():
     }
     assert zones_around("K/Hall", gates, 2) == ["K/Hall", "K/Entrance", "K/Streets"]
     assert zones_around("K/Hall", gates, 3)[-1] == "K/Far"
-
-
-def test_entity_map_merges_sightings_and_finds_nearest(tmp_path):
-    from wiz101_auto.entitymap import EntityMap
-
-    m = EntityMap(tmp_path / "e.json")
-    assert m.record("K/Hall", "Sokkwi Crusher", (0, 0, 0))
-    assert not m.record("K/Hall", "Sokkwi Crusher", (100, 0, 0))  # the same spot
-    assert m.record("K/Hall", "Sokkwi Crusher", (3000, 0, 0))
-    assert not m.record("K/Hall", "Basic Positional", (5, 5, 5))  # noise
-    spots = m.spots("K/Hall", lambda n: "sokkwi" in n.lower(), (2500, 0, 0))
-    assert spots[0][0] == 3000 and len(spots) == 2
-    m.save(force=True)
-    assert EntityMap(tmp_path / "e.json").zones["K/Hall"]["Sokkwi Crusher"]
-
-
-def test_door_memory(tmp_path):
-    from wiz101_auto.entitymap import DoorMemory
-
-    d = DoorMemory(tmp_path / "d.json")
-    d.record("K/Hub", (3697, 6190, -220), (3400, 6000, -220))
-    assert DoorMemory(tmp_path / "d.json").approach("K/Hub", (3700, 6200, -220)) == (3400, 6000, -220)
-    assert d.approach("K/Hub", (0, 0, 0)) is None
 
 
 def test_rare_chests_are_not_picked_up():
@@ -211,6 +192,7 @@ def test_world_hub_names():
 
 
 def test_is_world_hub():
+    pytest.importorskip("wizwalker")
     from wiz101_auto.travel_data import is_world_hub
 
     assert is_world_hub("Krokotopia/KT_Hub")
@@ -220,6 +202,7 @@ def test_is_world_hub():
 
 
 def test_the_place_after_in_comes_first():
+    pytest.importorskip("wizwalker")
     from wiz101_auto.travel_data import objective_zone
 
     assert objective_zone("Go to Barracks in Zamunda").startswith("Zafaria/")

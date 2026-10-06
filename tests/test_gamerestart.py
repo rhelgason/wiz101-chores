@@ -33,13 +33,6 @@ def test_one_restart_per_15_minutes(tmp_path, monkeypatch):
     assert gamerestart.wait_before_restart(now) == 0
 
 
-def test_the_death_realm_is_no_return():
-    from wiz101_auto.dungeons import no_return
-
-    assert no_return("MooShu/MS_Death/Interiors/MS_Death3_SpiritWorld")
-    assert not no_return("MooShu/MS_Death/Interiors/MS_Death3_T4")
-
-
 def test_bot_game_pid_round_trip(tmp_path, monkeypatch):
     from wiz101_auto import gamerestart
 

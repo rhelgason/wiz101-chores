@@ -1,3 +1,7 @@
-"""wiz101-auto: an autonomous Wizard101 bot built on WizWalker."""
+"""wiz101-auto: pet dance and reagent pickup for Wizard101, via WizWalker.
 
-__version__ = "0.3.0"
+Trimmed from a quest-and-combat bot. This tree does not quest, fight, or
+farm dungeons.
+"""
+
+__version__ = "0.4.0"

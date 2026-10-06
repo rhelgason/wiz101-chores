@@ -15,10 +15,19 @@ import re
 import time
 from pathlib import Path
 
-import wizwalker
-from wizwalker import XYZ
+try:
+    from wizwalker import XYZ
+except ImportError:  # unit tests on a machine without the Windows game library
+    class XYZ:  # noqa: N801
+        """Stand-in for wizwalker's XYZ so tests can run without the game library."""
 
-_TRAVERSAL_DIR = Path(wizwalker.__file__).parent / "extensions" / "wizsprinter" / "traversalData"
+        def __init__(self, x: float = 0, y: float = 0, z: float = 0):
+            self.x, self.y, self.z = float(x), float(y), float(z)
+
+        def __iter__(self):
+            yield self.x
+            yield self.y
+            yield self.z
 
 Gates = dict[str, list[tuple[XYZ, str]]]
 DisplayZones = list[tuple[str, str]]
@@ -247,16 +256,23 @@ def hop_count(current_zone: str, dest: str, gates: Gates) -> int | None:
 _cache: tuple[Gates, DisplayZones, Spots] | None = None
 
 
+def _traversal_dir() -> Path:
+    import wizwalker
+
+    return Path(wizwalker.__file__).parent / "extensions" / "wizsprinter" / "traversalData"
+
+
 def _data() -> tuple[Gates, DisplayZones, Spots]:
     global _cache
     if _cache is None:
-        display_text = (_TRAVERSAL_DIR / "displayZones.txt").read_text()
+        traversal = _traversal_dir()
+        display_text = (traversal / "displayZones.txt").read_text()
         display_zones = parse_display_zones(display_text) + EXTRA_DISPLAY_ZONES
         display_zones.sort(key=lambda z: -len(z[0]))
         _cache = (
-            parse_gates((_TRAVERSAL_DIR / "gates_list.txt").read_text()),
+            parse_gates((traversal / "gates_list.txt").read_text()),
             display_zones,
-            parse_spots((_TRAVERSAL_DIR / "objectLocations.txt").read_text()),
+            parse_spots((traversal / "objectLocations.txt").read_text()),
         )
         _load_learned(_cache[0])
     return _cache
@@ -274,7 +290,7 @@ def gate_kind(from_zone: str, to_zone: str) -> str:
     walked into: walking at it ran into Haunted Minions again and again)."""
     global _kinds
     if _kinds is None:
-        _kinds = parse_gate_kinds((_TRAVERSAL_DIR / "gates_list.txt").read_text())
+        _kinds = parse_gate_kinds((_traversal_dir() / "gates_list.txt").read_text())
         try:
             for key, kind in json.loads(GATE_KINDS_FILE.read_text(encoding="utf-8")).items():
                 a, b = key.split("|", 1)

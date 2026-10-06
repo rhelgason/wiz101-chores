@@ -15,42 +15,8 @@ echo   wiz101-auto  (one-click launcher)
 echo ============================================================
 echo.
 
-REM ---- 0. Self-update from GitHub -------------------------------------------
-REM Your config.yaml, state folder and .venv are never touched (they're
-REM git-ignored). The whole block is parsed before it runs, so replacing this
-REM file mid-update is safe; the new launcher is then restarted.
-set "REPO=https://github.com/szatcg/wiz101-auto.git"
-REM Only in menu mode: terminal commands (start/stop/status...) leave git alone
-REM so local development is never overwritten.
-if defined HAS_ARGS goto :noupdate
-if /i "%~1"=="--updated" goto :noupdate
-where git >nul 2>&1 || goto :noupdate
-echo [0/4] Checking for updates...
-if not exist .git (
-  git init -q
-  git remote add origin "%REPO%"
-  git fetch -q origin main && (
-    git reset -q --hard origin/main
-    git branch -q -M main
-    git branch -q -u origin/main main
-    "%~f0" --updated %*
-    exit /b
-  ) || (
-    echo       could not reach GitHub; using the files already here.
-  )
-  goto :noupdate
-)
-git diff --quiet && git diff --cached --quiet || (
-  echo       local changes present; skipping the automatic update.
-  goto :noupdate
-)
-git pull -q --ff-only origin main && (
-  for /f %%h in ('git rev-parse --short HEAD') do echo       on version %%h
-  "%~f0" --updated %*
-  exit /b
-) || (
-  echo       could not update from GitHub; using the files already here.
-)
+REM This fork does not pull the original quest bot. Updates are whatever is
+REM already in this folder.
 :noupdate
 
 REM ---- 1. Stop any other copy of the bot (old versions, other folders) ----
@@ -131,8 +97,8 @@ echo       installed.
 
 :configured
 if not exist config.yaml (
-  copy configs\myth.yaml config.yaml >nul
-  echo       created config.yaml from the Myth preset.
+  copy configs\chores.yaml config.yaml >nul
+  echo       created config.yaml from the chores preset.
 )
 set "BOT=.venv\Scripts\python.exe -m wiz101_auto"
 if defined HAS_ARGS (
@@ -143,42 +109,22 @@ if defined HAS_ARGS (
 REM ---- 4. Menu ----
 echo [4/4] Ready. Log into Wizard101 and stand in the world with your wizard.
 echo.
-echo   [1] Run the bot                      (starts automatically in 8 seconds)
+echo   [1] Run chores (pet dance + reagents)  (starts automatically in 8 seconds)
 echo   [2] Health check      - saves state\doctor.txt
-echo   [3] Show deck plan    - saves state\deck.txt (changes nothing)
-echo   [4] Rebuild my deck   - saves state\deck_apply.txt
-echo   [5] What the bot sees - saves state\inspect.txt
-echo   [6] Record this zone  - saves state\explore_*.txt
+echo   [3] What the bot sees - saves state\inspect.txt
 echo.
 echo   While the bot runs: Ctrl+Shift+Q = stop, Ctrl+Shift+P = pause/resume
 echo.
-choice /c 123456 /t 8 /d 1 /n /m "Choose 1-6: "
+choice /c 123 /t 8 /d 1 /n /m "Choose 1-3: "
 set "CHOICE=%errorlevel%"
 echo.
 if "%CHOICE%"=="1" goto :run
 if "%CHOICE%"=="2" goto :doctor
-if "%CHOICE%"=="3" goto :deck
-if "%CHOICE%"=="4" goto :deckapply
-if "%CHOICE%"=="5" goto :inspect
-if "%CHOICE%"=="6" goto :explore
+if "%CHOICE%"=="3" goto :inspect
 goto :done
 
 :run
 %BOT% run -c config.yaml
-goto :done
-
-:deck
-%BOT% deck -c config.yaml > state\deck.txt 2>&1
-type state\deck.txt
-echo.
-echo Saved to %~dp0state\deck.txt
-goto :done
-
-:deckapply
-%BOT% deck -c config.yaml --apply > state\deck_apply.txt 2>&1
-type state\deck_apply.txt
-echo.
-echo Saved to %~dp0state\deck_apply.txt
 goto :done
 
 :inspect
@@ -186,10 +132,6 @@ goto :done
 type state\inspect.txt
 echo.
 echo Saved to %~dp0state\inspect.txt
-goto :done
-
-:explore
-%BOT% explore
 goto :done
 
 :doctor

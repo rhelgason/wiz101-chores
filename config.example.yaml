@@ -1,65 +1,19 @@
-# Copy to config.yaml and adjust. Every key is optional; defaults are shown.
-
-# quest = follow the quest arrow and fight whatever comes up
-# fight = only play battles (you walk; handy for testing combat)
-# farm  = stay in the area and fight the nearest mob repeatedly
-mode: quest
-farm_seconds_between_fights: 2.0
+# Every option. Start from configs/chores.yaml.
+mode: chores                 # chores | pet | reagents
 log_file: wiz101-auto.log
 
-quest:
-  teleport: true            # false = walk to objectives (slower, looks more human)
-  accept_side_quests: false
-  photomancy: true
-  stuck_minutes: 12         # stop if the objective doesn't change for this long
+pet:
+  auto: true                 # energy full: go play the dance game, then come back
+  feed: true
+  default_goal: mega         # baby, teen, adult, ancient, epic, mega, ultra
+  goals: {}                  # override default_goal for one pet kind
 
-upkeep:
-  use_potions: true
-  potion_health_ratio: 0.5
-  potion_mana_ratio: 0.2
-  collect_wisps: true
-  min_health_to_fight: 0.8  # below this, heal up (potion, wisps, rest) before questing
-  rest_until_health: 0.95
-  rest_max_minutes: 8       # stop the bot if health can't be recovered in this time
-  wisp_health_ratio: 0.8
+reagents:
+  enabled: true
+  hop_zones: 1               # neighbouring zones to sweep after this one is empty
 
 safety:
-  stop_key: ctrl+shift+q     # any ctrl/shift/alt combo + one key, e.g. "ctrl+]"
+  stop_key: ctrl+shift+q
   pause_key: ctrl+shift+p
-  stall_seconds: 15          # nothing happens this long -> close menus, restart step, switch quest...
-  max_hours: 4.0            # 0 = no limit
-  mouseless: true           # clicks via a memory hook; your real mouse stays free
-
-combat:
-  max_discards: 2
-  flee_below: 0.0           # e.g. 0.15 to flee under 15% health; 0 = never
-  strategy:
-    heal_threshold: 0.45
-    ally_heal_threshold: 0.35
-    shield_threshold: 0.6
-    max_blades: 2
-    max_traps: 2
-    kill_bonus: 400.0
-    boss_setup: true
-    setup_health_multiplier: 2.0
-    max_hand_size: 7
-    allow_discard: true
-
-progression:
-  enabled: true
-  school: ""                # blank = detect from the game
-  rebuild_on_start: true    # re-plan the deck when the bot starts
-  check_minutes: 30         # also re-read the spellbook this often (0 = only on level-up/trainer)
-  auto_train: true          # experimental: train spells when a trainer window opens
-  remind_to_train: true
-  deck:
-    attack_spells: 4        # distinct attack spells
-    attack_copies: 4
-    heal_copies: 3
-    blade_copies: 2
-    trap_copies: 2
-    shield_copies: 1
-    core_copies: 2          # copies of every chosen spell added before topping up
-    capacity: 0             # 0 = let the game enforce its deck size
-    exclude: []
-    include: {}
+  max_hours: 0
+  mouseless: true
