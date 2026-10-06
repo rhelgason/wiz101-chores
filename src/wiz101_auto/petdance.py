@@ -444,10 +444,10 @@ class PetDancer:
                 logger.info(f"pet: no gate path back to {start}; staying here")
 
     async def _go_to_pavilion(self) -> bool:
-        from .travel import go_to_zone, reach_wizard_city
+        from .travel import go_to_zone
 
-        if not await reach_wizard_city(self.client):
-            return False
+        # Same route as a farm trip: gates in this world, the world door
+        # when the pavilion is in another, then Wizard City's gates.
         await go_to_zone(self.client, PET_PARK)
         await wait_for_loading(self.client)
         return await self.client.zone_name() == PET_PARK

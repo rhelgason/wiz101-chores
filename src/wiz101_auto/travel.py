@@ -1,10 +1,11 @@
-"""Get from one zone to another, and back to Wizard City.
+"""Get from one zone to another, including a change of world.
 
 Gate positions come from WizSprinter's traversal data (`travel_data`). A
 standard gate is walked into. A gate whose kind starts with "x" (a boat, a
-rope, a door that asks) is used by pressing X. From a house or the dorm, Go
-Home and the world gate reach Wizard City, then the same gates reach the
-Pet Pavilion.
+rope, a door that asks) is used by pressing X. Another world is this world's
+spiral door, in either direction. A house door opens onto any world. The
+dorm is left on foot. A zone with no gate path goes Home once, then the
+same route.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ DORM_DOOR = XYZ(-205.0, 13.0, 0.0)
 RAVENWOOD = "WizardCity/WC_Ravenwood"
 DORM_BUTTON = "GotoDormButton"
 HOUSE_FILE = Path("state") / "house.json"
-MAX_HOPS = 8
+MAX_HOPS = 24  # a world door plus the longer gate chains, and a few retries
 
 
 def is_house(zone: str | None) -> bool:
@@ -269,30 +270,46 @@ async def go_to_zone(client, dest: str, max_hops: int = MAX_HOPS) -> bool:
     from .travel_data import _data
 
     blocked: set[tuple[str, str]] = set()
-    took_door = False
+    door_uses = 0
+    escaped = False
     try:
         doors = zone_doors()
         gates = _data()[0]
     except Exception as exc:
         logger.warning(f"no gate data ({exc})")
         return False
-    for _ in range(max_hops + 2):
+    for _ in range(max_hops):
         zone = await client.zone_name() or ""
         if zone == dest:
             return True
         if not await is_free(client):
             logger.info(f"stopped on the way to {dest}: not free to move")
             return False
+        # The dorm has no gate. A house's own door opens onto any world.
+        if zone == DORM:
+            if not await _leave_dorm(client):
+                return False
+            continue
+        if is_house(zone):
+            logger.info(f"taking the house world door to {dest.split('/')[0]}")
+            if not await spiral_to(client, dest.split("/")[0]):
+                return False
+            continue
         step = travel_step(zone, dest, gates, doors, blocked)
         if step is None:
+            if not escaped:
+                escaped = True
+                logger.info(f"no gate path from {zone}; going home, then the world door")
+                if await go_home(client):
+                    continue
             where = "the world door" if zone.split("/")[0] != dest.split("/")[0] else dest
             logger.info(f"no gate path from {zone} to {where}")
             return False
         if step[0] == "world":
-            if took_door:
+            if door_uses >= 2:
                 logger.info(f"the world door did not reach {dest}")
                 return False
-            took_door = True
+            door_uses += 1
             _door_zone, door_pos = step[1], step[2]
             logger.info(f"taking the world door to {dest.split('/')[0]}")
             spot = door_pos if door_spot_usable(door_pos) else None

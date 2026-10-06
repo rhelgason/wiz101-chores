@@ -26,6 +26,12 @@ The day plan does not choose them.
    potatoes both count) switches that farm to Halfang Bristlecrown in
    Vestrilund. Level does not matter. A locked Wintertusk is tried again.
 
+Street gates stay inside one world. The spiral door changes worlds in
+either direction: the Pet Pavilion to Savarstaad or Vestrilund, Grizzleheim
+back to the pavilion, and one farm to the other. The dorm is left on foot.
+A house door opens onto any world. A zone with no gate path goes Home once,
+then takes that same door.
+
 `mode: pet` only dances. `mode: reagents` only gathers the reagent that was
 asked for. `chores` is the list above. Deaths, low health, a missed zone,
 and an empty snack pile do not stop the session. Stop is the menu bar, or

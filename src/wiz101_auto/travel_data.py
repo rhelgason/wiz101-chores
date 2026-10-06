@@ -200,6 +200,30 @@ def travel_step(
     return ("gate", pos, nxt)
 
 
+def route(zone: str, dest: str, gates: Gates, doors: dict[str, tuple[str, XYZ]], limit: int = 24):
+    """Every step from `zone` to `dest`.
+
+    A world step lands at that world's door, which is where the spiral door
+    puts the wizard. None when a world change or the gates after it are unknown.
+    """
+    steps = []
+    for _ in range(limit):
+        if zone == dest:
+            return steps
+        step = travel_step(zone, dest, gates, doors)
+        if step is None:
+            return None
+        steps.append(step)
+        if step[0] == "world":
+            door = doors.get(dest.split("/")[0])
+            if door is None:
+                return None
+            zone = door[0]
+        else:
+            zone = step[2]
+    return None
+
+
 def parse_spots(text: str) -> Spots:
     """`objectLocations.txt` lines `kind;x;y;z;zone` (zekeObject, eloiseObject...), grouped by zone."""
     spots: Spots = {}

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from wiz101_auto.travel_data import (
@@ -8,6 +10,7 @@ from wiz101_auto.travel_data import (
     parse_gates,
     parse_spots,
     parse_zone_doors,
+    route,
     travel_step,
 )
 
@@ -108,6 +111,9 @@ def test_travel_step_uses_the_world_door_between_worlds():
         "standard;1;1;0;WizardCity/WC_Streets/Interiors/WC_PET_Park;WizardCity/WC_Hub\n"
         "standard;2;2;0;WizardCity/WC_Hub;WizardCity/WC_Ravenwood\n"
         "standard;3;3;0;WizardCity/WC_Ravenwood;WizardCity/WC_Ravenwood_Teleporter\n"
+        "standard;5;5;0;WizardCity/WC_Ravenwood_Teleporter;WizardCity/WC_Ravenwood\n"
+        "standard;6;6;0;WizardCity/WC_Ravenwood;WizardCity/WC_Hub\n"
+        "standard;7;7;0;WizardCity/WC_Hub;WizardCity/WC_Streets/Interiors/WC_PET_Park\n"
         "standard;4;4;0;Grizzleheim/GH_MainHub;Grizzleheim/GH_Hero\n"
     )
     doors = parse_zone_doors(
@@ -126,6 +132,39 @@ def test_travel_step_uses_the_world_door_between_worlds():
     step = travel_step("Grizzleheim/GH_MainHub", "Grizzleheim/GH_Hero", gates, doors)
     assert step[0] == "gate" and step[2] == "Grizzleheim/GH_Hero"
     assert travel_step("Grizzleheim/GH_Hero", "Grizzleheim/GH_Hero", gates, doors) is None
+    back = route("Grizzleheim/GH_MainHub", "WizardCity/WC_Streets/Interiors/WC_PET_Park", gates, doors)
+    assert back is not None and back[0][0] == "world"
+    assert route("Grizzleheim/GH_Hero", "WizardCity/WC_Streets/Interiors/WC_PET_Park", gates, doors) is None
+
+
+def test_real_world_doors_reach_the_pavilion_and_the_farms():
+    """Both directions, for every world that has a door, and the two farms."""
+    root = Path.home() / (
+        "Library/Application Support/wiz101-chores/python/Lib/site-packages/"
+        "wizwalker/extensions/wizsprinter/traversalData"
+    )
+    if not (root / "gates_list.txt").exists():
+        pytest.skip("traversal data is not on this machine")
+    gates = parse_gates((root / "gates_list.txt").read_text())
+    doors = parse_zone_doors((root / "uniqueObjectLocations.txt").read_text())
+    pet = "WizardCity/WC_Streets/Interiors/WC_PET_Park"
+    savarstaad = "Grizzleheim/GH_Hero"
+    vestrilund = "Grizzleheim/GH_HFjord/GH_Vestrilund"
+    for start, dest in (
+        (pet, savarstaad),
+        (savarstaad, pet),
+        (pet, vestrilund),
+        (vestrilund, pet),
+        (savarstaad, vestrilund),
+        (vestrilund, savarstaad),
+    ):
+        steps = route(start, dest, gates, doors)
+        assert steps is not None, f"no route {start} -> {dest}"
+        changed = start.split("/")[0] != dest.split("/")[0]
+        assert any(step[0] == "world" for step in steps) is changed
+    for world, (door_zone, _pos) in doors.items():
+        assert route(door_zone, pet, gates, doors) is not None, world
+        assert route(pet, door_zone, gates, doors) is not None, world
 
 
 def test_gate_behind_is_opposite_the_facing_direction():
