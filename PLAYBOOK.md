@@ -35,7 +35,14 @@ A house door opens onto any world. A zone with no gate path goes Home once,
 then takes that same door.
 
 `mode: pet` only dances. `mode: reagents` only gathers the reagent that was
-asked for. `chores` is the list above. Deaths, low health, a missed zone,
+asked for. `mode: seeds` does not dance. It fights Troubled Warriors and
+Splithoof Barbarians in Savarstaad Pass until it is stopped. Health under
+the usual line uses a death drain. Mana under about a third walks to
+Northguard, takes a mana wisp, and comes back. A bag with two slots left
+goes to Elik at the Wizard City Bazaar, presses X, and opens Backpack Buddy.
+It sells only names that were not in the bag when the run started. Couch
+potato seeds stay. A name shared with an older item, and anything equipped,
+is not clicked. `chores` is the list above. Deaths, low health, a missed zone,
 and an empty snack pile do not stop the session. Stop is the menu bar, or
 `state/stop.request`.
 

@@ -235,6 +235,11 @@ def _click_left_of_center(client):
 
 async def chore_loop(client, cfg: Config, controller: Controller, task: dict):
     """Dance while energy can pay, then farm until the wizard is stopped."""
+    if cfg.mode == "seeds":
+        from .seeds import seed_loop
+
+        await seed_loop(client, controller, task)
+        return
     from .dayplan import choose
     from .duty import carry_out, look
     from .petdance import PET_REQUEST, games_requested
@@ -312,9 +317,9 @@ def _apply_mode(cfg: Config):
     if cfg.mode == "pet":
         cfg.pet.auto = True
         cfg.reagents.enabled = False
-    elif cfg.mode == "reagents":
+    elif cfg.mode in ("reagents", "seeds"):
         cfg.pet.auto = False
-        cfg.reagents.enabled = True
+        cfg.reagents.enabled = False if cfg.mode == "seeds" else True
 
 
 async def run(cfg: Config):
@@ -327,6 +332,8 @@ async def run(cfg: Config):
     s = cfg.safety
     controller = Controller(s.stop_key, s.pause_key, s.max_hours)
     doing = []
+    if cfg.mode == "seeds":
+        doing.append("Savarstaad seeds until stopped (Troubled Warriors and Splithoof Barbarians)")
     if cfg.pet.auto:
         doing.append("dance while energy can pay, then Splithoof seeds (Halfang after 20 couch potatoes)")
     if cfg.reagents.enabled:

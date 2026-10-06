@@ -8,7 +8,7 @@ from typing import Any
 
 import yaml
 
-MODES = ("chores", "pet", "reagents")  # chores is the day plan in PLAYBOOK.md
+MODES = ("chores", "pet", "reagents", "seeds")  # chores is the day plan in PLAYBOOK.md
 
 
 @dataclass
@@ -43,7 +43,7 @@ class ReagentConfig:
 
 @dataclass
 class Config:
-    mode: str = "chores"  # the day plan | pet only | a reagent sweep only
+    mode: str = "chores"  # the day plan | pet only | a reagent sweep | Savarstaad seeds
     log_file: str = "wiz101-auto.log"
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     pet: PetConfig = field(default_factory=PetConfig)

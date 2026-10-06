@@ -17,11 +17,13 @@ from loguru import logger
 
 PLACES = {
     "splithoof": ("Savarstaad Pass", "Boar Camp"),
+    "seeds": ("Savarstaad Pass",),
     "halfang": ("Vestrilund",),
     "early-gold": ("Triton Avenue", "Cyclops Lane"),
 }
 NEEDLES = {
     "splithoof": ("splithoof", "barbarian"),
+    "seeds": ("troubled", "splithoof"),
     "halfang": ("halfang", "bristlecrown"),
     "early-gold": ("lost soul", "rotten", "dark fairy", "ghoul"),
 }

@@ -1,5 +1,5 @@
 # Every option. Start from configs/chores.yaml. The day plan is PLAYBOOK.md.
-mode: chores                 # chores | pet | reagents
+mode: chores                 # chores | pet | reagents | seeds
 log_file: wiz101-auto.log
 
 pet:

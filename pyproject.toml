@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "wiz101-auto"
-version = "0.8.4"
+version = "0.8.5"
 description = "Wizard101 day plan: ghulture training, couch potatoes, and gold via WizWalker"
 readme = "README.md"
 license = "GPL-3.0-or-later"

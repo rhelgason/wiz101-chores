@@ -15,6 +15,12 @@ def test_chores_preset(tmp_path):
     assert cfg.pet.auto is False
 
 
+def test_seeds_mode_is_its_own_run(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("mode: seeds\n", encoding="utf-8")
+    assert load_config(path).mode == "seeds"
+
+
 def test_unknown_key_and_old_quest_mode(tmp_path):
     path = tmp_path / "config.yaml"
     path.write_text("mode: quest\n", encoding="utf-8")
