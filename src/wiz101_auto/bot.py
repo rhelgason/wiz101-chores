@@ -225,9 +225,14 @@ def _click_left_of_center(client):
 
 
 async def chore_loop(client, cfg: Config, controller: Controller, task: dict):
-    """Pet dance when energy is full, and reagent sweeps the rest of the time."""
+    """The day plan: spend energy on the ghulture and the garden, then gold."""
+    from .dayplan import choose
+    from .duty import carry_out, look
+    from .petdance import PET_REQUEST, games_requested
+
     dancer = PetDancer(client, cfg.pet, controller)
     gatherer = Gatherer(client, cfg.reagents.hop_zones, controller)
+    last = ""
     while not controller.stopped.is_set():
         await controller.checkpoint()
         try:
@@ -235,27 +240,28 @@ async def chore_loop(client, cfg: Config, controller: Controller, task: dict):
                 task["name"] = "waiting (in a fight, dialogue, or loading)"
                 await asyncio.sleep(0.4)
                 continue
-            if cfg.pet.auto or _pet_waiting():
-                task["name"] = "pet dance"
-                if await dancer.tick():
-                    continue
-            if cfg.reagents.enabled:
-                task["name"] = "reagents"
-                await gatherer.tick()
-            else:
-                task["name"] = "idle"
+            if games_requested() is not None:
+                task["name"] = "pet dance (requested)"
+                wanted = games_requested() or 0
+                try:
+                    await dancer.trip(wanted)
+                finally:
+                    PET_REQUEST.unlink(missing_ok=True)
+                continue
+            snap = await look(client, cfg, dancer)
+            decision = choose(snap)
+            task["name"] = decision.action
+            key = f"{decision.action}|{decision.why}|{decision.target}"
+            if key != last:
+                logger.info(f"day: {decision.action} — {decision.why}")
+                last = key
+            await carry_out(decision, client, dancer, gatherer)
         except BotStopped:
             break
         except Exception as exc:
             logger.opt(exception=exc).error(f"chore step failed: {exc}")
             task["name"] = "error, retrying"
-        await asyncio.sleep(1.0)
-
-
-def _pet_waiting() -> bool:
-    from .petdance import games_requested
-
-    return games_requested() is not None
+            await asyncio.sleep(1.0)
 
 
 async def status_loop(client, controller: Controller, task: dict):

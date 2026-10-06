@@ -1,21 +1,22 @@
-# Chore bot. Copy to config.yaml (wiz101.bat does this the first time).
+# Day plan. Copy to config.yaml (wiz101.bat does this the first time).
+# The rules it follows are in PLAYBOOK.md.
 #
 #   wiz101-auto run -c config.yaml
 #
-# mode: chores   pet dance when energy is full, and reagent pickup the rest of the time
-#       pet      only the dance game
-#       reagents only reagent and chest pickup
+# mode: chores    spend energy on the ghulture and the garden, gold after that
+#       pet       only the ghulture (dance, then hatch when it is ready)
+#       reagents  only the reagent that was asked for
 mode: chores
 
 pet:
   auto: true
   feed: true                 # feed the first snack after each win
-  default_goal: mega         # stop once the pet reaches this stage
-  goals: {}                  # per pet kind, lower case, e.g. {bloodbat: adult}
+  default_goal: adult        # the plan raises one confirm pet to mega itself
+  goals: {}                  # per pet kind, lower case, e.g. {ghulture: adult}
 
 reagents:
-  enabled: true
-  hop_zones: 1               # also sweep zones this many gates away (0 = this zone only)
+  enabled: true              # follow a tracked "Collect ..." quest
+  hop_zones: 1               # after the named zones, walk this many gates out
 
 safety:
   stop_key: ctrl+shift+q

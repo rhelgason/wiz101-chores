@@ -308,11 +308,21 @@ class PetDancer:
             except OSError:
                 pass
         pet = load_pet()
-        kind = kind_in(texts, list(self.cfg.goals))
+        kind = kind_in(texts, list(dict.fromkeys([*self.cfg.goals, "ghulture"])))
         stage = stage_in(texts)
         changed = False
         if kind and kind != pet.get("kind"):
             pet["kind"], changed = kind, True
+        if window_name == "PetLevelUpWindow":
+            from .petplan import talents_mentioned
+
+            have = list(pet.get("talents") or [])
+            for talent in talents_mentioned(texts):
+                if talent not in have:
+                    have.append(talent)
+                    changed = True
+            if have != list(pet.get("talents") or []):
+                pet["talents"] = have
         old = pet.get("stage")
         if stage and stage != old and (window_name == "PetLevelUpWindow" or old not in STAGES
                                        or STAGES.index(stage) > STAGES.index(old)):
@@ -321,7 +331,7 @@ class PetDancer:
             save_pet(pet)
             logger.info(f"pet: {pet.get('kind') or 'the pet'} is {pet.get('stage') or '?'}")
 
-    async def trip(self, wanted: int):
+    async def trip(self, wanted: int, energy_floor: int = 0):
         start = await self.client.zone_name() or ""
         resumed = in_pet_game(start)
         if resumed:
@@ -339,12 +349,18 @@ class PetDancer:
             while games < limit:
                 if self.controller:
                     self.controller.allow_idle(GAME_IDLE_SECONDS)
-                result = await self.play_one()
+                result = await self.play_one(energy_floor)
                 if result != "won":
                     why = result
                     break
                 games += 1
                 logger.success(f"pet: dance game {games} won")
+                from .petplan import pet_failed
+
+                if pet_failed(load_pet().get("talents") or []):
+                    why = "a talent outside the ghulture set manifested; stopping"
+                    logger.info(f"pet: {why}")
+                    break
                 if self.done():
                     pet = load_pet()
                     why = f"{pet.get('kind') or 'the pet'} reached {pet.get('stage')}: its goal"
@@ -385,7 +401,7 @@ class PetDancer:
             await asyncio.sleep(0.6)
         return False
 
-    async def play_one(self) -> str:
+    async def play_one(self, energy_floor: int = 0) -> str:
         """One game, from the sigil to the reward screen closed: 'won', or
         why it stopped ('no energy', 'no snacks', 'no sigil', 'no game')."""
         root = self.client.root_window
@@ -407,9 +423,11 @@ class PetDancer:
         await self._learn("PetGameTracks")
         cost = first_number(await _text(root, "PetGameTracks", "txtEnergyCost"))
         have = first_number(await _text(root, "PetGameTracks", "txtYourEnergy"))
-        logger.info(f"pet: energy {have} (a game costs {cost})")
+        logger.info(f"pet: energy {have} (a game costs {cost}; holding {energy_floor})")
         if cost is not None and have is not None and have < cost:
             return "no energy"
+        if cost is not None and have is not None and have - cost < energy_floor:
+            return "holding energy"
         # (Clicks while the scroll still unrolls are lost: the game never
         # started on the other window. Settle first, and press again while
         # the window is still up.)

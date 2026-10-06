@@ -1,33 +1,31 @@
 # wiz101-auto
 
-A Wizard101 **chore** bot. It reads the game through
-[WizWalker](https://github.com/Deimos-Wizard101/Deimos-Wizard101) and does the
-repetitive side work:
+A Wizard101 bot that spends the day on the tedious work. The plan is
+[PLAYBOOK.md](PLAYBOOK.md). It reads the game through
+[WizWalker](https://github.com/Deimos-Wizard101/Deimos-Wizard101).
 
-| Chore | What it does |
+Energy (the green globe) goes to the ghulture and the garden first. A full
+bar interrupts everything else. Gold is what it does when energy cannot pay
+for those. Reagents and fishing happen when a quest asks.
+
+| Work | What runs |
 |---|---|
-| **Pet dance** | Walks to the Pet Pavilion, plays the dance game until energy runs out (moves are read from memory), feeds the first snack after each win, then walks back. |
-| **Reagents** | Picks up reagents and unlocked chests in the current zone, then in zones a gate or two away. It will not teleport onto an enemy. |
-
-This tree was cut down from a quest-and-combat bot. It does not follow the
-quest arrow, play battles, farm dungeons, build decks, or train spells.
+| **Ghulture** | Dance game, read from memory, to adult. A talent outside death-dealer, death-giver, pain-giver, mighty, and armor breaker stops the body. Hatching is decided and not clicked. |
+| **Garden** | Boom shrooms until rank 3, then couch potatoes. It goes home when a plant needs care. Spells are not cast blind. |
+| **Reagents** | One named reagent from the tracked quest, or `reagent "scrap iron"`. Scrap iron is the Marleybone streets. |
+| **Fishing** | Noticed when a fishing quest is tracked. The reel is not played, because a missed cast still spends the energy. |
+| **Gold** | Named (Splithoof while seeds are short, then Halfang). Fights are not started. |
 
 > Automation breaks KingsIsle's Terms of Use and accounts do get banned.
 > That risk is yours.
 
-## What is not here
+## What is not clicked
 
-The friend's bot never played these, and they are not guessed at here:
-
-- The other Pet Pavilion games (Cannon, Maze, Gobbler Drop, Grumpy Gobblers,
-  Way of the Ninja Pig). Only the dance game exposes its move list in memory.
-  The others are live aiming and steering games. Pressing keys without that
-  read spends energy and fails the game.
-- Fishing.
-- Gardening.
-
-Those need a Windows session with the game open, so the real windows and
-memory can be mapped the way the dance game already is.
+Hatching, the housing shop, garden spells, the fishing reel, and gold fights
+need their windows mapped on a live Windows client. The bot decides each of
+them and will not invent the click. The other Pet Pavilion games (Cannon,
+Maze, Gobbler Drop, Grumpy Gobblers, Way of the Ninja Pig) are not played.
+Only the dance game exposes its move list.
 
 ## Setup (Windows)
 
@@ -51,8 +49,10 @@ next start fails until Wizard101 is fully restarted.
 
 | Command | What |
 |---|---|
-| `run` | pet dance when energy is full, and reagent sweeps (`-m pet` or `-m reagents` for one of them) |
-| `pet [--games N]` | ask the running bot to go dance now |
+| `run` | the day plan (`-m pet` or `-m reagents` for one of those) |
+| `pet [--games N]` | dance now, ahead of the plan |
+| `reagent "scrap iron"` / `reagent --clear` | gather that reagent, or go back to the tracked quest |
+| `fish` / `fish --clear` | a fishing quest is waiting, or it is done |
 | `pet-alt start` | dance-only bot on a second Wizard101 window that is already in the Pet Pavilion |
 | `inspect` | zone, position, nearby reagents (bot stopped) |
 | `inspect --windows` | plus the UI window tree |

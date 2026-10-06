@@ -100,7 +100,7 @@ def main(argv: list[str] | None = None):
             pass
     parser = argparse.ArgumentParser(
         prog="wiz101-auto",
-        description="Wizard101 chore bot: pet dance game and reagent pickup",
+        description="Wizard101 chore bot: ghulture, couch potatoes, and gold when energy is spent",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -121,6 +121,11 @@ def main(argv: list[str] | None = None):
         "--games", type=int, default=0,
         help="at most this many games (0: until energy runs out)",
     )
+    reag_p = sub.add_parser("reagent", help="ask the running bot to gather one reagent")
+    reag_p.add_argument("name", nargs="?", default="", help='e.g. "scrap iron"')
+    reag_p.add_argument("--clear", action="store_true", help="stop gathering and follow the quest only")
+    fish_p = sub.add_parser("fish", help="tell the bot a fishing quest needs doing")
+    fish_p.add_argument("--clear", action="store_true", help="the fishing quest is done")
     alt_p = sub.add_parser("pet-alt", help="pet-only bot on the other game window")
     alt_p.add_argument("action", choices=["start", "stop", "status", "run"])
     alt_p.add_argument("--pid", type=int, default=0, help="that game's process id")
@@ -162,7 +167,7 @@ def main(argv: list[str] | None = None):
         _watch(ACTIVITY_LOG)
         return
 
-    if sys.platform != "win32" and args.command not in ("pet",):
+    if sys.platform != "win32" and args.command not in ("pet", "reagent", "fish"):
         raise SystemExit("wiz101-auto talks to the Windows game client and must run on Windows.")
     _lower_priority()
 
@@ -221,6 +226,28 @@ def main(argv: list[str] | None = None):
         PET_REQUEST.write_text(str(max(0, args.games)), encoding="utf-8")
         n = f"{args.games} game(s)" if args.games else "games until the pet is out of energy"
         print(f"requested: at its next free moment the bot goes to the Pet Pavilion for {n}, then comes back")
+        return 0
+    if args.command == "reagent":
+        from .duty import REAGENT_REQUEST
+
+        REAGENT_REQUEST.parent.mkdir(exist_ok=True)
+        if args.clear or not args.name.strip():
+            REAGENT_REQUEST.unlink(missing_ok=True)
+            print("cleared: reagent runs follow the tracked quest only")
+            return 0
+        REAGENT_REQUEST.write_text(args.name.strip(), encoding="utf-8")
+        print(f"requested: gather {args.name.strip()} when energy is not needed for the pet or the garden")
+        return 0
+    if args.command == "fish":
+        from .duty import FISH_REQUEST
+
+        FISH_REQUEST.parent.mkdir(exist_ok=True)
+        if args.clear:
+            FISH_REQUEST.unlink(missing_ok=True)
+            print("cleared: fishing follows the tracked quest only")
+            return 0
+        FISH_REQUEST.write_text("1", encoding="utf-8")
+        print("requested: a fishing quest is on. Energy goes to the pet and garden first")
         return 0
     if args.command == "pet-alt":
         from . import petclient

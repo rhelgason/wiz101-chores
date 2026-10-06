@@ -8,7 +8,7 @@ from typing import Any
 
 import yaml
 
-MODES = ("chores", "pet", "reagents")
+MODES = ("chores", "pet", "reagents")  # chores is the day plan in PLAYBOOK.md
 
 
 @dataclass
@@ -21,20 +21,21 @@ class SafetyConfig:
 
 @dataclass
 class PetConfig:
-    """Pet dance game. `auto`: when energy is full, go to the Pet Pavilion,
-    play until it runs out, then walk back. A pet stops at its goal stage
-    (`goals`, by pet kind, lower case). Any other pet stops at `default_goal`."""
+    """Pet dance game. `auto` lets the day plan train the equipped ghulture.
+    It stops at `goals` (by pet kind) or `default_goal`. The plan sets the
+    ghulture goal itself: adult, or mega for the one confirm pet."""
 
     auto: bool = True
     goals: dict = field(default_factory=dict)
-    default_goal: str = "mega"
+    default_goal: str = "adult"
     feed: bool = True  # feed the first snack offered after each win
 
 
 @dataclass
 class ReagentConfig:
-    """Pick up reagents and unlocked chests in this zone, then in zones a few
-    gates away (`hop_zones`, 0 = this zone only)."""
+    """Reagents are gathered when a quest or `reagent "name"` asks. `enabled`
+    follows the tracked quest. There is no all-day sweep of every node.
+    `hop_zones` is how far to walk once the named zones are empty."""
 
     enabled: bool = True
     hop_zones: int = 1
@@ -42,7 +43,7 @@ class ReagentConfig:
 
 @dataclass
 class Config:
-    mode: str = "chores"  # chores (pet + reagents) | pet | reagents
+    mode: str = "chores"  # the day plan | pet only | a reagent sweep only
     log_file: str = "wiz101-auto.log"
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     pet: PetConfig = field(default_factory=PetConfig)

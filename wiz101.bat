@@ -109,7 +109,7 @@ if defined HAS_ARGS (
 REM ---- 4. Menu ----
 echo [4/4] Ready. Log into Wizard101 and stand in the world with your wizard.
 echo.
-echo   [1] Run chores (pet dance + reagents)  (starts automatically in 8 seconds)
+echo   [1] Run the day plan (pet, garden, gold)  (starts automatically in 8 seconds)
 echo   [2] Health check      - saves state\doctor.txt
 echo   [3] What the bot sees - saves state\inspect.txt
 echo.

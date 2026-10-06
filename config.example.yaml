@@ -1,16 +1,16 @@
-# Every option. Start from configs/chores.yaml.
+# Every option. Start from configs/chores.yaml. The day plan is PLAYBOOK.md.
 mode: chores                 # chores | pet | reagents
 log_file: wiz101-auto.log
 
 pet:
-  auto: true                 # energy full: go play the dance game, then come back
+  auto: true                 # the day plan may train the equipped ghulture
   feed: true
-  default_goal: mega         # baby, teen, adult, ancient, epic, mega, ultra
+  default_goal: adult        # baby, teen, adult, ancient, epic, mega, ultra
   goals: {}                  # override default_goal for one pet kind
 
 reagents:
-  enabled: true
-  hop_zones: 1               # neighbouring zones to sweep after this one is empty
+  enabled: true              # follow a tracked collect quest; not an all-day sweep
+  hop_zones: 1               # neighbouring zones after the named ones are empty
 
 safety:
   stop_key: ctrl+shift+q

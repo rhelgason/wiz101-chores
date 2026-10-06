@@ -250,16 +250,21 @@ class Collector:
         self._cache = (item, now, found)
         return found
 
-    async def collect_nearby(self, press_interact, max_range: float = LOOT_RANGE) -> bool:
+    async def collect_nearby(
+        self, press_interact, max_range: float = LOOT_RANGE, only: str | None = None
+    ) -> bool:
         """Grab the nearest safe free pickup (reagent, chest...) within
-        `max_range`. Each one is tried once (chests stay after opening). True
-        if it went for one."""
+        `max_range`. `only` limits it to a reagent name ("scrap iron").
+        Each one is tried once (chests stay after opening). True if it went for one."""
         me = await self.client.body.position()
         found = []
         for e in await self.client.get_base_entity_list():
             try:
                 template = await e.object_template()
-                if not template or not is_collectable(await template.object_name()):
+                obj = await template.object_name() if template else ""
+                if not template or not is_collectable(obj):
+                    continue
+                if only and re.sub(r"[^a-z]", "", only.lower()) not in re.sub(r"[^a-z]", "", obj.lower()):
                     continue
                 gid = await e.global_id_full()
                 if gid in self._looted:

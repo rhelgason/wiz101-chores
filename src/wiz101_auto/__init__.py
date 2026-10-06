@@ -1,7 +1,7 @@
-"""wiz101-auto: pet dance and reagent pickup for Wizard101, via WizWalker.
+"""wiz101-auto: the Wizard101 day plan (ghulture, couch potatoes, gold).
 
-Trimmed from a quest-and-combat bot. This tree does not quest, fight, or
-farm dungeons.
+Trimmed from a quest-and-combat bot. What it does, and what it will not fake,
+is in PLAYBOOK.md.
 """
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
