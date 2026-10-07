@@ -277,16 +277,20 @@ async def chore_loop(client, cfg: Config, controller: Controller, task: dict):
             break
         except ClientClosedError:
             closed += 1
+            from .farm import closed_detail
+
+            detail = closed_detail()
             if closed >= 3:
                 logger.error(
-                    "Wizard101 closed while the bot was hooked. Fully quit Wizard101 "
+                    "Wizard101 closed while the bot was hooked"
+                    f"{detail}. Fully quit Wizard101 "
                     "(exit to desktop), start it, log in, stand in the world, then run "
                     "./mac/run.sh again."
                 )
                 controller.stop("the game client closed")
                 break
             if closed == 1:
-                logger.warning("the game client closed; retrying")
+                logger.warning(f"the game client closed{detail}; retrying")
             task["name"] = "waiting for the game"
             await asyncio.sleep(2.0)
         except Exception as exc:

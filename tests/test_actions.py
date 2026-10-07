@@ -7,13 +7,18 @@ from wiz101_auto.farm import (
     CAMPS,
     approach_point,
     best_mob,
+    closed_detail,
     combo_spell,
     is_death_heal,
     leave_alone,
     mob_matches,
+    nearest_other,
     needs_heal,
     next_combo,
+    note_step,
+    pull_plan,
     resting,
+    teleport_allowed,
     too_hurt_to_pull,
 )
 from wiz101_auto.fishing import bite_ready, can_cast
@@ -92,10 +97,30 @@ def test_a_farm_mob_matches_its_name():
 
 
 def test_a_pull_lands_beside_the_mob_and_a_miss_is_left_alone():
-    land = approach_point((0.0, 0.0, 0.0), (1000.0, 0.0, 5.0))
-    assert abs(math.hypot(land[0] - 1000.0, land[1]) - 450.0) < 1.0
-    inside = approach_point((1000.0, 0.0, 5.0), (1000.0, 50.0, 5.0))
-    assert abs(math.hypot(inside[0] - 1000.0, inside[1] - 50.0) - 450.0) < 1.0
+    land = approach_point((0.0, 0.0, 0.0), (1000.0, 0.0, 5.0), 520.0)
+    assert abs(math.hypot(land[0] - 1000.0, land[1]) - 520.0) < 1.0
+    inside = approach_point((1000.0, 0.0, 5.0), (1000.0, 50.0, 5.0), 1800.0)
+    assert abs(math.hypot(inside[0] - 1000.0, inside[1] - 50.0) - 1800.0) < 1.0
+    assert pull_plan(100) == "walk_out"
+    assert pull_plan(800) == "walk_in"
+    assert pull_plan(9000) == "teleport"
+    assert pull_plan(400) == "walk_in"
+    assert pull_plan(4000) == "walk_in"
+    groups = (("troubled", "splithoof barbarian"), ("splithoof",))
+    rows = [
+        (None, "Splithoof Barbarian", 9000.0, 5),
+        (None, "Splithoof Barbarian", 300.0, 9),
+        (None, "Tree", 10.0, 1),
+    ]
+    assert nearest_other(rows, 5, groups) == 300.0
+    assert nearest_other([(None, "Tree", 10.0, 1)], 5, groups) is None
+    assert teleport_allowed(9000, None, known=True)
+    assert not teleport_allowed(9000, None, known=False)
+    assert not teleport_allowed(9000, 300, known=True)
+    assert teleport_allowed(9000, 1500, known=True)
+    assert not teleport_allowed(800, None, known=True)
+    note_step("step=teleport why=outside gid=5")
+    assert "step=teleport" in closed_detail()
     leave_alone(77, 20.0)
     assert resting(77)
     assert not resting(77, now=time.monotonic() + 60.0)

@@ -4,4 +4,4 @@ Trimmed from a quest-and-combat bot. What it does, and what it will not fake,
 is in PLAYBOOK.md.
 """
 
-__version__ = "0.8.8"
+__version__ = "0.8.9"
