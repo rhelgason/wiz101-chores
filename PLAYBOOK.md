@@ -45,7 +45,9 @@ the Savarstaad compass spots. Those jumps wait until the zone is free and
 skip the Northguard gate, which was loading the wizard out of the pass.
 It walks onto the creature. A fight is played when the battle window is
 up, even when the duel phase still says it has not started. The loop does
-not sit through the card timer. Across the zone, one teleport lands a short
+not sit through the card timer. After the wizard stands on a creature, no
+teleport runs for a short while: that jump, while the duel was still
+joining, closed the game. Across the zone, one teleport lands a short
 walk away and that same walk finishes it. A creature that does not fight
 is skipped in place, and the next pull walks to another. Movement keys are
 posted. This Wine build drops the other key path, so a walk that only turns

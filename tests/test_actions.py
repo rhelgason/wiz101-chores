@@ -8,6 +8,7 @@ from wiz101_auto.farm import (
     COMBO,
     FIGHT_WAIT_POLLS,
     GROUPS,
+    JOIN_HOLD,
     NORTHGUARD_GATE,
     already_there,
     approach_point,
@@ -29,6 +30,7 @@ from wiz101_auto.farm import (
     resting,
     teleport_allowed,
     too_hurt_to_pull,
+    unstick_allowed,
     walk_seconds,
     walk_stuck,
 )
@@ -166,7 +168,15 @@ def test_a_closer_rager_loses_to_the_named_barbarian():
     assert best_mob(labels, groups) == 1
     assert best_mob([("Tree", 1.0)], groups) is None
     assert len(CAMPS["seeds"]) > 4
-    assert FIGHT_WAIT_POLLS * 0.4 >= 8.0
+    assert FIGHT_WAIT_POLLS * 0.4 >= 14.0
+
+
+def test_no_teleport_while_a_nearby_fight_may_be_joining():
+    assert unstick_allowed(None) is True
+    assert unstick_allowed(0.0) is False
+    assert unstick_allowed(JOIN_HOLD - 0.1) is False
+    assert unstick_allowed(JOIN_HOLD) is True
+    assert unstick_allowed(30.0, fighting=True) is False
 
 
 def test_savarstaad_names_the_three_combo_cards():

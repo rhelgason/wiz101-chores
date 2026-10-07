@@ -90,8 +90,13 @@ CLEAR_OF = 1000.0
 ENGAGE_GAP = ARRIVE
 # A creature that did not start a fight, or just died, is left alone this long.
 MISS_FOR = 20.0
-# Battle join after a teleport. 3s missed the 23:20 fight, and the loop then waited.
-FIGHT_WAIT_POLLS = 20
+# The duel phase flipped about 11s after the wizard stood on the boar.
+# An 8s wait gave up, the next pull teleported, and Wine closed (23:34).
+FIGHT_WAIT_POLLS = 35
+# No teleport for this long after standing on a mob. The join locks movement,
+# and a jump during that lock is what closed the client.
+JOIN_HOLD = 15.0
+_contact_at = 0.0
 _leave_until: dict[int, float] = {}
 _last_step = ""
 ROUNDS = 30
@@ -157,6 +162,32 @@ def walk_seconds(distance: float, speed_bonus: float = 0.0) -> float:
 def walk_stuck(moved: float, attempted: float) -> bool:
     """The hold finished and the wizard is still where it started."""
     return attempted >= 80.0 and moved < 40.0
+
+
+def mark_mob_contact(now: float | None = None) -> None:
+    """The wizard is on a mob. A teleport in the next few seconds can close Wine."""
+    global _contact_at
+    _contact_at = time.monotonic() if now is None else now
+
+
+def seconds_since_contact(now: float | None = None) -> float | None:
+    if not _contact_at:
+        return None
+    current = time.monotonic() if now is None else now
+    return current - _contact_at
+
+
+def unstick_allowed(seconds_since: float | None, *, fighting: bool = False) -> bool:
+    """False while a duel may be joining, or while one is already on screen.
+
+    Standing on a boar, waiting 8s, then teleporting closed the client. The
+    same fights showed up a couple of seconds after that wait gave up.
+    """
+    if fighting:
+        return False
+    if seconds_since is None:
+        return True
+    return seconds_since >= JOIN_HOLD
 
 
 def already_there(here: str, target: str) -> bool:
@@ -323,9 +354,23 @@ async def _teleport_to(
     *,
     engage: bool = True,
 ) -> bool:
-    """Teleport only when the hook is idle. The log line is written first."""
+    """Teleport only when the hook is idle and a duel is not joining."""
     from wizwalker import XYZ
 
+    try:
+        fighting = await in_fight(client)
+    except Exception as exc:
+        if _client_closed(exc):
+            raise
+        fighting = False
+    if not unstick_allowed(seconds_since_contact(), fighting=fighting):
+        if fighting:
+            logger.info(f"farm: skipping teleport ({why}); a fight is already on screen")
+        else:
+            logger.info(
+                f"farm: skipping teleport ({why}); the last mob's fight may still be joining"
+            )
+        return False
     busy = await _hook_busy(client)
     if busy:
         logger.info(f"farm: teleport hook is busy before {why}; waiting")
@@ -484,6 +529,7 @@ async def _pull(
                 logger.info("farm: teleport skipped; walking the whole way")
             if dist <= 80.0:
                 logger.info(f"farm: reached gid={gid or 0} ({dist:.0f})")
+                mark_mob_contact()
                 break
             await _walk_to(client, mob_xyz, f"to gid={gid or 0} from {dist:.0f}")
     except Exception as exc:

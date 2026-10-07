@@ -392,9 +392,8 @@ async def chore_loop(client, cfg: Config, controller: Controller, task: dict):
             if closed >= 3:
                 logger.error(
                     "Wizard101 closed while the bot was hooked"
-                    f"{detail}. Fully quit Wizard101 "
-                    "(exit to desktop), start it, log in, stand in the world, then run "
-                    "./mac/run.sh again."
+                    f"{detail}. The window is already gone. Start it, log in, "
+                    "stand in the world, then run ./mac/run.sh again."
                 )
                 controller.stop("the game client closed")
                 break
