@@ -20,6 +20,8 @@ from wiz101_auto.farm import (
     resting,
     teleport_allowed,
     too_hurt_to_pull,
+    walk_seconds,
+    walk_stuck,
 )
 from wiz101_auto.fishing import bite_ready, can_cast
 from wiz101_auto.garden import count_potatoes, count_seeds, loot_mentioned_potato, need_spell, spell_caption
@@ -121,6 +123,12 @@ def test_a_pull_lands_beside_the_mob_and_a_miss_is_left_alone():
     assert not teleport_allowed(800, None, known=True)
     note_step("step=teleport why=outside gid=5")
     assert "step=teleport" in closed_detail()
+    assert abs(walk_seconds(580) - 1.0) < 0.01
+    assert abs(walk_seconds(580, 40) - (1.0 / 1.4)) < 0.01
+    assert walk_seconds(0) == 0.0
+    assert walk_stuck(0, 200)
+    assert not walk_stuck(180, 200)
+    assert not walk_stuck(0, 20)
     leave_alone(77, 20.0)
     assert resting(77)
     assert not resting(77, now=time.monotonic() + 60.0)

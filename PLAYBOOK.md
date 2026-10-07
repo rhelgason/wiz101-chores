@@ -41,11 +41,12 @@ casts Deathblade, then Empower, then Scarecrow, and passes while the next
 of those is not ready. A death drain is used only when health is low and
 that next card cannot be cast. If neither creature is loaded where the
 wizard is standing, it moves through the Savarstaad compass spots until
-one is. It walks to the aggro edge and does not walk onto the creature.
-A teleport is used only when that creature is far and every other one is
-clear, and the jump lands well outside it. Standing on a creature means
-walking away first. One that does not start a fight is left alone. The log
-names each teleport and each walk before it runs. Mana under about a third walks to
+one is. It faces the creature and holds W with a posted key. The game
+ignores the other key path, so that one only turns the wizard. If the hold
+does not move it, the bot teleports to the same outside point. It does not
+teleport while standing on a creature, and it does not walk onto one. One
+that does not start a fight is left alone. The log names each teleport and
+each walk before it runs. Mana under about a third walks to
 Northguard, takes a mana wisp, and comes back. A bag with two slots left
 goes to Elik at the Wizard City Bazaar, presses X, and opens Backpack Buddy.
 It sells only names that were not in the bag when the run started. Couch

@@ -128,6 +128,24 @@ def approach_point(
     return me[0] + dx * reach, me[1] + dy * reach, mob[2]
 
 
+BASE_SPEED = 580.0
+
+
+def walk_seconds(distance: float, speed_bonus: float = 0.0) -> float:
+    """Seconds to hold W. `speed_bonus` is the game's percent; 0 is normal speed."""
+    factor = (speed_bonus / 100.0) + 1.0
+    if factor <= 0.05:
+        factor = 1.0
+    if distance <= 1.0:
+        return 0.0
+    return distance / (BASE_SPEED * factor)
+
+
+def walk_stuck(moved: float, attempted: float) -> bool:
+    """The hold finished and the wizard is still where it started."""
+    return attempted >= 80.0 and moved < 40.0
+
+
 def pull_plan(dist: float) -> str:
     """walk_out on the creature, teleport only when it is far, otherwise walk_in."""
     if dist < TOO_CLOSE:
@@ -298,11 +316,78 @@ async def _teleport_to(
     return True
 
 
-async def _walk_to(client, dest: tuple[float, float, float], why: str) -> None:
-    """Walk. Never to the creature's own coordinates. The log line is written first."""
-    note_step(f"step=goto why={why} dest=({dest[0]:.0f},{dest[1]:.0f})")
+async def _speed_bonus(client) -> float:
+    try:
+        return float(await client.client_object.speed_multiplier())
+    except Exception as exc:
+        logger.info(f"farm: speed unread ({type(exc).__name__}: {exc})")
+        if _client_closed(exc):
+            raise
+        return 0.0
+
+
+async def _face(client, yaw: float) -> None:
+    """Turn the body goto was turning. That write is what spins the wizard."""
+    await client.body.write_yaw(yaw)
+    try:
+        other = await client.client_object.actor_body()
+        if other is not None:
+            await other.write_yaw(yaw)
+    except Exception as exc:
+        logger.info(f"farm: second yaw unread ({type(exc).__name__}: {exc})")
+        if _client_closed(exc):
+            raise
+
+
+async def _hold_forward(client, x: float, y: float) -> tuple[float, float]:
+    """Face the point and hold W with PostMessage.
+
+    client.goto holds W with SendMessageW. On this Wine build that key never
+    arrives, so the wizard only turns. The dance arrows use PostMessageW.
+    Returns (units moved, units attempted).
+    """
+    from wizwalker.utils import XYZ, calculate_perfect_yaw
+
+    from .petdance import post_key
+
+    me = await client.body.position()
+    attempted = math.hypot(x - me.x, y - me.y)
+    if attempted < 20.0:
+        logger.info(f"farm: already at the walk point ({attempted:.0f})")
+        return 0.0, attempted
+    seconds = walk_seconds(attempted, await _speed_bonus(client))
+    yaw = calculate_perfect_yaw(XYZ(me.x, me.y, me.z), XYZ(x, y, me.z))
+    await _face(client, yaw)
+    logger.info(f"farm: posting W for {seconds:.1f}s yaw={yaw:.2f} toward ({x:.0f},{y:.0f})")
+    await post_key(client.window_handle, "W", seconds)
+    after = await client.body.position()
+    moved = math.hypot(after.x - me.x, after.y - me.y)
+    logger.info(f"farm: walk moved {moved:.0f} of {attempted:.0f}")
+    return moved, attempted
+
+
+async def _walk_to(
+    client,
+    dest: tuple[float, float, float],
+    why: str,
+    *,
+    teleport_if_stuck: bool = True,
+) -> None:
+    """Walk. Never to the creature's own coordinates. The log line is written first.
+
+    Standing on a creature passes teleport_if_stuck=False. A teleport from
+    inside the mesh is what closed the client.
+    """
+    note_step(f"step=walk why={why} dest=({dest[0]:.0f},{dest[1]:.0f})")
     logger.info(f"farm: {last_step()}")
-    await client.goto(dest[0], dest[1])
+    moved, attempted = await _hold_forward(client, dest[0], dest[1])
+    if walk_stuck(moved, attempted) and teleport_if_stuck:
+        logger.info(
+            f"farm: W did not move the wizard ({moved:.0f} of {attempted:.0f}); "
+            "teleporting to the same point"
+        )
+        await _teleport_to(client, dest, f"unstick {why}")
+        return
     await _log_where(client, f"after {why}")
 
 
@@ -347,7 +432,12 @@ async def _pull(
     try:
         if plan == "walk_out":
             away = approach_point((me.x, me.y, me.z), mob_xyz, OUTSIDE)
-            await _walk_to(client, away, f"walk out, gid={gid or 0} was {dist:.0f} away")
+            await _walk_to(
+                client,
+                away,
+                f"walk out, gid={gid or 0} was {dist:.0f} away",
+                teleport_if_stuck=False,
+            )
             if await client.in_battle():
                 logger.info(f"farm: fight started while walking out gid={gid or 0}")
                 return True
