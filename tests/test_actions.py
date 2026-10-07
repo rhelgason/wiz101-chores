@@ -5,6 +5,7 @@ import time
 
 from wiz101_auto.farm import (
     CAMPS,
+    COMBO,
     FIGHT_WAIT_POLLS,
     GROUPS,
     NORTHGUARD_GATE,
@@ -13,6 +14,7 @@ from wiz101_auto.farm import (
     best_mob,
     closed_detail,
     combo_spell,
+    fight_visible,
     is_death_heal,
     leave_alone,
     mob_matches,
@@ -21,6 +23,7 @@ from wiz101_auto.farm import (
     needs_heal,
     next_combo,
     note_step,
+    phase_disagrees,
     pull_destination,
     pull_plan,
     resting,
@@ -174,12 +177,25 @@ def test_savarstaad_names_the_three_combo_cards():
     assert combo_spell("Ghoul") is None
 
 
-def test_savarstaad_waits_for_the_next_combo_card():
+def test_seeds_combo_is_empower_then_scarecrow():
+    assert COMBO == ("empower", "scarecrow")
     hand = {"deathblade", "empower", "scarecrow"}
-    assert next_combo([], hand, hand) == "deathblade"
-    assert next_combo(["deathblade"], hand, hand) == "empower"
-    assert next_combo(["deathblade", "empower"], hand, hand) == "scarecrow"
-    assert next_combo([], {"empower"}, {"deathblade", "empower"}) is None
-    assert next_combo([], {"empower"}, {"empower"}) == "empower"
-    assert next_combo(["deathblade", "empower", "scarecrow"], {"scarecrow"}, hand) == "scarecrow"
+    assert next_combo([], hand, hand) == "empower"
+    assert next_combo(["empower"], hand, hand) == "scarecrow"
+    assert next_combo([], {"empower"}, {"deathblade", "empower"}) == "empower"
+    assert next_combo([], set(), {"empower", "scarecrow"}) is None
+    assert next_combo(["empower"], {"scarecrow"}, {"empower", "scarecrow"}) == "scarecrow"
+    assert next_combo(["empower", "scarecrow"], {"scarecrow"}, hand) == "scarecrow"
     assert next_combo([], set(), set()) is None
+
+
+def test_a_visible_battle_counts_when_the_phase_says_it_ended():
+    assert fight_visible(False, 0, set()) is False
+    assert fight_visible(True, 0, set()) is True
+    assert fight_visible(False, 3, set()) is True
+    assert fight_visible(False, 0, {"CombatantControl"}) is True
+    assert fight_visible(False, 0, {"Focus"}) is False
+    assert fight_visible(None, 1, set()) is True
+    missed = phase_disagrees(False, 2, {"DoneWindow"})
+    assert "cards=2" in missed and "DoneWindow" in missed
+    assert phase_disagrees(True, 2, {"DoneWindow"}) == ""

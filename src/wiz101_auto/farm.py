@@ -1,9 +1,10 @@
 """One fight for seeds or gold, then back to the day plan.
 
 The mob is the one named for that farm, by its template name or the name
-on its plate. Savarstaad casts Deathblade, then Empower, then Scarecrow,
-and passes while the next of those is not ready. If those creatures are
-not loaded, it moves through the pass until one is.
+on its plate. Savarstaad casts Empower, then Scarecrow, and passes while
+the next of those is not ready. Deathblade is not used. A battle window
+counts as a fight even when the duel phase still says it has not started.
+If those creatures are not loaded, it moves through the pass until one is.
 A pull walks onto the creature. Across the zone, one teleport lands a short
 walk away and the same walk finishes it. A creature that does not fight is
 skipped in place. The next pull walks to another. Camp jumps wait until the
@@ -99,8 +100,9 @@ PULL_BELOW = 0.35  # gather health before starting another fight
 # Death drains. Cast on an enemy; the caster is the one who is healed.
 DRAIN_NAMES = ("ghoul", "wraith", "vampire", "skeletal dragon")
 DRAIN_EFFECTS = {"steal_health", "steal_over_time"}
-# Savarstaad. Each is cast once, in order, then Scarecrow again if they live.
-COMBO = ("deathblade", "empower", "scarecrow")
+# Savarstaad. Empower, then Scarecrow, then Scarecrow again if they live.
+# Deathblade stays in the deck and is not cast on this farm.
+COMBO = ("empower", "scarecrow")
 
 
 def _flat(name: str) -> str:
@@ -441,20 +443,19 @@ async def _pull(
 ) -> bool:
     """Walk onto the creature. One teleport first when it is across the zone."""
     try:
-        if await client.in_battle():
+        if await in_fight(client):
             logger.info(f"farm: already in a fight with {label or target} gid={gid or 0}")
             return True
     except Exception as exc:
         logger.info(f"farm: battle check failed ({type(exc).__name__}: {exc})")
         if _client_closed(exc):
             raise
-        return False
     if not gid:
         logger.info("farm: this creature has no id, so a miss will not be remembered")
     near_s = "none" if nearest is None else f"{nearest:.0f}"
     try:
         for attempt in (1, 2):
-            if await client.in_battle():
+            if await in_fight(client):
                 logger.info(f"farm: fight started with gid={gid or 0}")
                 return True
             pos = await mob.location()
@@ -490,7 +491,7 @@ async def _pull(
         if _client_closed(exc):
             raise
         try:
-            if await client.in_battle():
+            if await in_fight(client):
                 logger.info(f"farm: fight started during the pull gid={gid or 0}")
                 return True
         except Exception as check:
@@ -501,14 +502,82 @@ async def _pull(
     return await _wait_for_fight(client, gid)
 
 
-async def in_fight(client) -> bool:
-    """True while a duel is on screen, including the join before the cards appear."""
+def fight_visible(in_battle: bool | None, cards: int, windows: set[str]) -> bool:
+    """A duel is on screen.
+
+    The duel phase said the 23:20 fight had not started while the battle
+    window was up. Visible hand cards or combatant frames count on their own.
+    """
+    if in_battle:
+        return True
+    if cards > 0:
+        return True
+    found = {name.lower() for name in windows}
+    return "combatantcontrol" in found or "donewindow" in found
+
+
+def phase_disagrees(in_battle: bool | None, cards: int, windows: set[str]) -> str:
+    """Why the window says there is a fight when the phase does not. Empty if they agree."""
+    if in_battle or not fight_visible(in_battle, cards, windows):
+        return ""
+    parts = [f"cards={cards}"]
+    if windows:
+        parts.append(", ".join(sorted(windows)))
+    return " ".join(parts)
+
+
+async def _window_visible(window) -> bool:
     try:
-        return bool(await client.in_battle())
+        from wizwalker.memory import WindowFlags
+
+        return WindowFlags.visible in await window.flags()
+    except Exception:
+        return False
+
+
+async def _duel_signals(client) -> tuple[bool | None, int, set[str]]:
+    """Phase flag, visible hand cards, and visible battle-window names.
+
+    The window tree is walked only when the phase says there is no fight.
+    A normal round does not pay for that walk.
+    """
+    try:
+        phase: bool | None = bool(await client.in_battle())
     except Exception as exc:
         if _client_closed(exc):
             raise
-        return False
+        phase = None
+    if phase:
+        return True, 0, set()
+    cards = 0
+    names: set[str] = set()
+    try:
+        root = client.root_window
+        for box in await root.get_windows_with_type("SpellCheckBox"):
+            try:
+                if await box.name() == "PetCard":
+                    continue
+                if await _window_visible(box):
+                    cards += 1
+            except Exception:
+                continue
+        for name in ("CombatantControl", "DoneWindow"):
+            for window in await root.get_windows_with_name(name):
+                try:
+                    if await _window_visible(window):
+                        names.add(name)
+                except Exception:
+                    continue
+    except Exception as exc:
+        if _client_closed(exc):
+            raise
+    return phase, cards, names
+
+
+async def in_fight(client) -> bool:
+    """True while a duel is on screen, including when the phase read says it ended."""
+    phase, cards, names = await _duel_signals(client)
+    return fight_visible(phase, cards, names)
 
 
 async def play_current_fight(client, controller, *, combo: bool = True) -> None:
@@ -520,12 +589,25 @@ async def play_current_fight(client, controller, *, combo: bool = True) -> None:
 
 async def _wait_for_fight(client, gid: int) -> bool:
     for _ in range(FIGHT_WAIT_POLLS):
-        if await in_fight(client):
-            logger.info(f"farm: fight started with gid={gid or 0}")
+        phase, cards, names = await _duel_signals(client)
+        if fight_visible(phase, cards, names):
+            missed = phase_disagrees(phase, cards, names)
+            if missed:
+                logger.info(
+                    f"farm: fight started with gid={gid or 0}; "
+                    f"the duel phase had not caught up ({missed})"
+                )
+            else:
+                logger.info(f"farm: fight started with gid={gid or 0}")
             return True
         await asyncio.sleep(0.4)
+    phase, cards, names = await _duel_signals(client)
+    shown = ",".join(sorted(names)) or "none"
     leave_alone(gid)
-    logger.info(f"farm: gid={gid or 0} did not start a fight; trying another")
+    logger.info(
+        f"farm: gid={gid or 0} did not start a fight "
+        f"(phase_in_battle={phase}, cards={cards}, windows={shown}); trying another"
+    )
     return False
 
 
@@ -582,7 +664,7 @@ async def fight_one(client, target: str, controller=None) -> bool:
         logger.info(f"farm: the fight in {zone.split('/')[-1] or 'this zone'} is over")
         leave_alone(gid, 12.0)
         clear = await _step_off(client, mob)
-        if await client.in_battle():
+        if await in_fight(client):
             logger.info("farm: still in a fight; playing it")
             await _play(client, controller, combo=target == "seeds")
             await _note_potato(client)
@@ -1012,8 +1094,9 @@ def combo_spell(name: str) -> str | None:
 def next_combo(done: list[str], castable: set[str], in_hand: set[str]) -> str | None:
     """The next Savarstaad card, or None to pass.
 
-    A card that is in hand but not castable yet is waited on. A card that is
-    not in hand is skipped, so a missing blade still reaches Scarecrow.
+    Empower, then Scarecrow. Deathblade is not in the sequence, so a blade
+    in hand does not delay Empower. A sequence card that is in hand but not
+    castable yet is waited on. One that is not in hand is skipped.
     """
     finished = set(done)
     for step in COMBO:
@@ -1028,26 +1111,84 @@ def next_combo(done: list[str], castable: set[str], in_hand: set[str]) -> str | 
     return None
 
 
+async def _planning_ready(handler) -> bool | None:
+    """True on the planning phase. False when the phase says the fight ended.
+
+    A memory miss is reported as ended by the client, which is how a visible
+    fight was skipped. The caller keeps the battle window ahead of that.
+    """
+    from wizwalker.memory import DuelPhase
+
+    try:
+        phase = await handler.client.duel.duel_phase()
+    except Exception as exc:
+        if _client_closed(exc):
+            raise
+        logger.info(f"farm: duel phase unreadable ({type(exc).__name__}: {exc})")
+        return None
+    if phase == DuelPhase.planning:
+        return True
+    if phase == DuelPhase.ended:
+        return False
+    return None
+
+
+async def _ready_to_cast(handler, phase: bool | None, cards: int) -> bool:
+    """Hand cards can be played. The phase is used only when no card is visible."""
+    if cards > 0:
+        return True
+    if phase is not True:
+        return False
+    return await _planning_ready(handler) is True
+
+
 async def _play(client, controller, combo: bool = False):
     from wizwalker.combat import AoeHandler
 
     handler = AoeHandler(client)
     done: list[str] = []
-    for _ in range(ROUNDS):
+    announced = False
+    missing = 0
+    idle = 0
+    casts = 0
+    while casts < ROUNDS:
         if controller:
             await controller.checkpoint()
         ratio = await _ratio(client)
         if ratio is not None and ratio <= 0:
+            logger.info("farm: health is gone; leaving the fight")
             return
-        try:
-            if not await handler.in_combat():
+        phase, cards, names = await _duel_signals(client)
+        if not fight_visible(phase, cards, names):
+            missing += 1
+            if missing >= 3:
+                logger.info(
+                    f"farm: the fight window is gone (phase_in_battle={phase}, cards={cards})"
+                )
                 return
-        except Exception:
-            return
+            await asyncio.sleep(0.4)
+            continue
+        missing = 0
+        disagreed = phase_disagrees(phase, cards, names)
+        if disagreed and not announced:
+            logger.info(f"farm: the duel phase says no fight, but the battle window is up ({disagreed})")
+            announced = True
         try:
-            await handler.wait_for_planning_phase()
-        except Exception:
-            return
+            ready = await _ready_to_cast(handler, phase, cards)
+        except Exception as exc:
+            if _client_closed(exc):
+                raise
+            logger.info(f"farm: could not read the round ({type(exc).__name__}: {exc})")
+            ready = cards > 0
+        if not ready:
+            idle += 1
+            if idle >= 75:
+                logger.info("farm: the battle window stayed up but no card was ready")
+                return
+            await asyncio.sleep(0.4)
+            continue
+        idle = 0
+        casts += 1
         try:
             if combo:
                 await _cast_combo(handler, done, heal=needs_heal(ratio))
@@ -1057,13 +1198,15 @@ async def _play(client, controller, combo: bool = False):
             logger.info(f"farm: round failed ({exc}); passing")
             try:
                 await handler.pass_button()
-            except Exception:
+            except Exception as pass_exc:
+                logger.info(f"farm: pass failed ({pass_exc})")
                 return
         await asyncio.sleep(0.4)
+    logger.info("farm: stopped after the round limit")
 
 
 async def _cast_combo(handler, done: list[str], heal: bool = False) -> str:
-    """Deathblade on the wizard, Empower on the wizard, Scarecrow on the fight."""
+    """Empower on the wizard, then Scarecrow on the fight."""
     cards = []
     for card in await handler.get_cards():
         try:
@@ -1084,7 +1227,7 @@ async def _cast_combo(handler, done: list[str], heal: bool = False) -> str:
         logger.info("farm: health is low and no death drain is in hand")
     if step is None:
         await handler.pass_button()
-        logger.info("farm: passing until Deathblade, Empower, or Scarecrow is ready")
+        logger.info("farm: passing until Empower or Scarecrow is ready")
         return "pass"
     card = next(card for card, spell, ok in cards if spell == step and ok)
     if step == "scarecrow":

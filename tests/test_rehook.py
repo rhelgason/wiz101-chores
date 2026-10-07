@@ -93,6 +93,45 @@ def test_bytes_that_are_already_original_are_left_alone():
     assert rehook.regions_to_restore(record, 0x1000, {50: b"\xE9\x00"}) == [(50, b"\xF2\x0F")]
 
 
+def test_a_live_game_keeps_its_originals_and_a_closed_one_does_not():
+    record = rehook.snapshot_payload(5, 0x1000, [(50, b"\xF2\x0F")])
+    assert rehook.leftovers_remain(record, 0x1000, {50: b"\xE9\x00"}) is True
+    assert rehook.leftovers_remain(record, 0x1000, {50: b"\xF2\x0F"}) is False
+    assert rehook.leftovers_remain(record, 0x1000, {}) is True
+    assert rehook.leftovers_remain(record, 0x2000, {50: b"\xE9\x00"}) is False
+    assert rehook.keep_hook_record(running=True) is True
+    assert rehook.keep_hook_record(running=False) is False
+
+
+def test_a_second_bot_is_refused_while_the_first_is_alive(tmp_path):
+    path = tmp_path / "bot.lock"
+    assert rehook.claim_bot_lock(path, pid=4, alive=lambda pid: pid == 4) is None
+    busy = rehook.claim_bot_lock(path, pid=8, alive=lambda pid: pid == 4)
+    assert busy and "already running" in busy and "leave Wizard101 open" in busy
+    assert rehook.claim_bot_lock(path, pid=8, alive=lambda pid: False) is None
+    rehook.release_bot_lock(path, pid=8)
+    assert not path.exists()
+
+
+def test_a_stuck_scan_cursor_stops():
+    assert rehook.scan_advance(100, 100, 0) is None
+    assert rehook.scan_advance(100, 80, 10) is None
+    assert rehook.scan_advance(100, 100, 64) == 164
+    assert rehook.page_is_scannable(0) is False
+    assert rehook.page_is_scannable(rehook.MAX_SCAN_PAGE + 1) is False
+    assert rehook.page_is_scannable(4096) is True
+
+
+def test_a_slow_rehook_does_not_ask_the_game_to_quit(tmp_path, monkeypatch):
+    from wiz101_auto import gamerestart
+
+    monkeypatch.setattr(gamerestart, "REQUEST", tmp_path / "req")
+    monkeypatch.setattr(gamerestart, "game_windows", lambda: [123])
+    assert "Could not hook" not in rehook.SCAN_STALL
+    assert "Hooks did not activate" not in rehook.SCAN_STALL
+    assert gamerestart.needs_restart(rehook.SCAN_STALL) == ""
+
+
 def test_forgetting_one_game_keeps_the_other(tmp_path):
     path = tmp_path / "hooks.json"
     rehook.remember_installed_hooks(_Client(pid=5), path)

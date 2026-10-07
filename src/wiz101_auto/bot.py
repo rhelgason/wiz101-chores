@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 
 from loguru import logger
 from wizwalker import ClientHandler
@@ -17,6 +18,7 @@ from .safety import BotStopped, Controller
 from .world import is_free
 
 HOOK_TIMEOUT = 90
+HOOK_SCAN_TIMEOUT = 60.0
 CONNECT_TIMEOUT = 300.0
 SHUTDOWN_WAIT = 10.0
 
@@ -82,10 +84,15 @@ async def mouse_on_pause(client, controller, mouseless: bool):
                 pass
 
 
-async def close_handler(handler: ClientHandler):
-    """Unhook. A failed unhook keeps the saved originals so the next start can put them back."""
-    from .rehook import forget_hooks
+async def close_handler(handler: ClientHandler) -> bool:
+    """Unhook. The saved originals stay while this game is still open.
 
+    Returns True when unhooking did not finish. The caller exits so a new
+    run can put those bytes back instead of scanning beside this one.
+    """
+    from .rehook import UNHOOK_TIMEOUT, forget_hooks, keep_hook_record, originals_back
+
+    stuck = False
     for client in list(handler.clients):
         release_mouse_buttons(client)
         pid = int(getattr(client, "process_id", 0) or 0)
@@ -93,17 +100,33 @@ async def close_handler(handler: ClientHandler):
             running = bool(client.is_running())
         except Exception:
             running = False
-        if not running:
+        if not keep_hook_record(running=running):
             forget_hooks(pid=pid)
             continue
         try:
-            await client.close()
+            await asyncio.wait_for(client.close(), timeout=UNHOOK_TIMEOUT)
+        except TimeoutError:
+            stuck = True
+            logger.error(
+                "unhooking took too long; the next start puts those bytes back and hooks this same game"
+            )
+            continue
         except Exception as exc:
             logger.opt(exception=exc).error(
                 "unhooking failed; the next start puts those bytes back and hooks this same game"
             )
             continue
-        forget_hooks(pid=pid)
+        try:
+            back = await originals_back(client)
+        except Exception:
+            back = False
+        if back:
+            logger.info("unhooked; saved hook bytes stay for the next start of this same game")
+        else:
+            logger.info(
+                "unhook left hook bytes in this game; the next start puts the saved originals back"
+            )
+    return stuck
 
 
 WORLD_HOOKS = ("player_struct", "player_stat_struct", "current_client", "current_render_context")
@@ -129,19 +152,50 @@ async def connect(handler: ClientHandler):
     if len(clients) > 1:
         logger.info(f"{len(clients)} game windows open; using the bot's own (process {client.process_id})")
     remember_game(client.process_id, client.window_handle)
-    from .rehook import remember_installed_hooks, restore_leftover_hooks
+    from .rehook import (
+        SCAN_STALL,
+        game_record,
+        install_scan_guard,
+        load_hooks,
+        record_matches,
+        remember_installed_hooks,
+        restore_leftover_hooks,
+    )
 
     restored = 0
     logger.info("activating hooks (can take a few seconds; move your wizard a step if it stalls)")
     try:
         hooks = client.hook_handler
+        install_scan_guard(hooks)
+        had_record = game_record(load_hooks(), int(client.process_id))
         restored = await restore_leftover_hooks(client)
         if restored:
             logger.info(
                 f"the game was already hooked ({restored} spots); "
                 "put the original code back and hooking again"
             )
-        await hooks.activate_all_hooks(wait_for_ready=False)
+        elif had_record:
+            try:
+                same = record_matches(had_record, int(hooks.process.base_address))
+            except Exception:
+                same = False
+            if same:
+                logger.info("saved hook bytes already match this game; hooking again")
+            else:
+                logger.info("saved hooks are for a different game build; hooking")
+        else:
+            logger.info("no saved hooks for this game window; hooking")
+        try:
+            await asyncio.wait_for(
+                hooks.activate_all_hooks(wait_for_ready=False),
+                timeout=HOOK_SCAN_TIMEOUT,
+            )
+        except TimeoutError:
+            try:
+                remember_installed_hooks(client)
+            except Exception:
+                pass
+            raise SystemExit("\n" + SCAN_STALL) from None
         _click_left_of_center(client)
         await asyncio.wait_for(hooks._wait_for_value(hooks._base_addrs["current_root_window"], None),
                                timeout=HOOK_TIMEOUT)
@@ -400,6 +454,11 @@ async def run(cfg: Config):
     logger.info(f"mode={cfg.mode}: {', '.join(doing) or 'nothing enabled'}. "
                 f"{s.stop_key}=stop, {s.pause_key}=pause/resume")
 
+    from .rehook import claim_bot_lock, release_bot_lock
+
+    busy = claim_bot_lock()
+    if busy:
+        raise SystemExit("\n" + busy)
     handler = new_handler()
     tasks: list[asyncio.Task] = []
     stack = contextlib.AsyncExitStack()
@@ -409,10 +468,23 @@ async def run(cfg: Config):
         except TimeoutError:
             from . import gamerestart
 
-            gamerestart.request(f"could not get into the world within {CONNECT_TIMEOUT / 60:.0f} min")
+            running = False
+            try:
+                running = any(bool(c.is_running()) for c in handler.clients)
+            except Exception:
+                running = False
+            if not running:
+                gamerestart.request(
+                    f"could not get into the world within {CONNECT_TIMEOUT / 60:.0f} min"
+                )
+                raise SystemExit(
+                    f"could not get into the world within {CONNECT_TIMEOUT / 60:.0f} min; "
+                    "asked for a game restart"
+                ) from None
             raise SystemExit(
-                f"could not get into the world within {CONNECT_TIMEOUT / 60:.0f} min; "
-                "asked for a game restart"
+                "\nGetting into this open Wizard101 took too long. "
+                "Leave the game open and run again. "
+                "Quit the game only when its window is already gone."
             ) from None
         obey_controller(client, controller)
         if s.mouseless:
@@ -449,4 +521,11 @@ async def run(cfg: Config):
             await stack.aclose()
         except Exception:
             pass
-        await close_handler(handler)
+        stuck = False
+        try:
+            stuck = await close_handler(handler)
+        finally:
+            release_bot_lock()
+        if stuck:
+            logger.error("exiting so the next run can hook this same open game")
+            os._exit(0)

@@ -68,6 +68,11 @@ else
   echo "starting the day plan in the Wizard101 bottle"
 fi
 echo "stop: the Wiz menu, Stop Wizard Bot.command, or: python3 -m wiz101_auto stop"
+# The bracket keeps this check from matching its own command line.
+if pgrep -f '[w]iz101_auto run' >/dev/null 2>&1; then
+  echo "A bot is already running. Stop it from the Wiz menu, leave Wizard101 open, then run again."
+  exit 1
+fi
 if [[ -n "$MODE" ]]; then
   exec "$WINE" "$PY" -m wiz101_auto run -c "$CONFIG" -m "$MODE"
 fi
