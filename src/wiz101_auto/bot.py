@@ -83,15 +83,27 @@ async def mouse_on_pause(client, controller, mouseless: bool):
 
 
 async def close_handler(handler: ClientHandler):
-    """Unhook. One failed client doesn't leave the others patched."""
+    """Unhook. A failed unhook keeps the saved originals so the next start can put them back."""
+    from .rehook import forget_hooks
+
     for client in list(handler.clients):
         release_mouse_buttons(client)
+        pid = int(getattr(client, "process_id", 0) or 0)
+        try:
+            running = bool(client.is_running())
+        except Exception:
+            running = False
+        if not running:
+            forget_hooks(pid=pid)
+            continue
         try:
             await client.close()
         except Exception as exc:
             logger.opt(exception=exc).error(
-                "unhooking failed; restart Wizard101 before running the bot again"
+                "unhooking failed; the next start puts those bytes back and hooks this same game"
             )
+            continue
+        forget_hooks(pid=pid)
 
 
 WORLD_HOOKS = ("player_struct", "player_stat_struct", "current_client", "current_render_context")
@@ -117,9 +129,18 @@ async def connect(handler: ClientHandler):
     if len(clients) > 1:
         logger.info(f"{len(clients)} game windows open; using the bot's own (process {client.process_id})")
     remember_game(client.process_id, client.window_handle)
+    from .rehook import remember_installed_hooks, restore_leftover_hooks
+
+    restored = 0
     logger.info("activating hooks (can take a few seconds; move your wizard a step if it stalls)")
     try:
         hooks = client.hook_handler
+        restored = await restore_leftover_hooks(client)
+        if restored:
+            logger.info(
+                f"the game was already hooked ({restored} spots); "
+                "put the original code back and hooking again"
+            )
         await hooks.activate_all_hooks(wait_for_ready=False)
         _click_left_of_center(client)
         await asyncio.wait_for(hooks._wait_for_value(hooks._base_addrs["current_root_window"], None),
@@ -139,13 +160,37 @@ async def connect(handler: ClientHandler):
             )),
             timeout=HOOK_TIMEOUT,
         )
-    except (PatternFailed, MemoryWriteError, MemoryReadError, ClientClosedError):
+    except ClientClosedError:
         await close_handler(handler)
         raise SystemExit(
-            "\nCould not hook into the game: its memory still holds changes from an earlier bot "
-            "session that did not shut down cleanly.\n"
-            "FIX: fully close Wizard101 (exit to desktop), start it again, log in, then rerun.\n"
-            "To avoid this, stop the bot with Ctrl+Shift+Q (or the Wiz menu) instead of closing its window."
+            "Wizard101 is not running. Start it, log in, stand in the world, then run again.\n"
+            "Stopping the bot does not need a game restart while that window stays open."
+        ) from None
+    except (PatternFailed, MemoryWriteError, MemoryReadError) as exc:
+        try:
+            remember_installed_hooks(client)
+        except Exception:
+            pass
+        await close_handler(handler)
+        try:
+            running = bool(client.is_running())
+        except Exception:
+            running = False
+        if not running:
+            raise SystemExit(
+                "Wizard101 is not running. Start it, log in, stand in the world, then run again.\n"
+                "Stopping the bot does not need a game restart while that window stays open."
+            ) from None
+        why = (
+            "The previous hooks were put back and it still failed."
+            if restored
+            else "This process still has hook changes, and their original bytes were not recorded."
+        )
+        raise SystemExit(
+            f"\nCould not hook into the game ({type(exc).__name__}).\n"
+            f"{why}\n"
+            "Fully quit Wizard101 once, start it, log in, then rerun.\n"
+            "After a successful hook, later runs reuse this same game."
         ) from None
     except TimeoutError:
         raise SystemExit(
@@ -159,6 +204,7 @@ async def connect(handler: ClientHandler):
 
     install(client)
     install_wine_keys(client)
+    remember_installed_hooks(client)
     return client
 
 
@@ -364,6 +410,9 @@ async def run(cfg: Config):
         obey_controller(client, controller)
         if s.mouseless:
             await stack.enter_async_context(client.mouse_handler)
+            from .rehook import remember_installed_hooks
+
+            remember_installed_hooks(client)
         task = {"name": "starting"}
         tasks = [
             asyncio.create_task(controller.watch(), name="safety"),

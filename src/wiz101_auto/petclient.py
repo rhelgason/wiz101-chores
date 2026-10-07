@@ -67,7 +67,11 @@ def pick_client(clients, main_pid: int, want_pid: int = 0):
 
 async def _hook(client):
     from .bot import HOOK_TIMEOUT, WORLD_HOOKS
+    from .rehook import remember_installed_hooks, restore_leftover_hooks
 
+    restored = await restore_leftover_hooks(client)
+    if restored:
+        logger.info(f"pet-alt: put {restored} old hooks back; hooking again")
     hooks = client.hook_handler
     await hooks.activate_all_hooks(wait_for_ready=False)
     await asyncio.wait_for(
@@ -75,6 +79,7 @@ async def _hook(client):
                          for n in ("current_root_window", *WORLD_HOOKS))),
         timeout=HOOK_TIMEOUT,
     )
+    remember_installed_hooks(client)
 
 
 async def _wait(seconds: float, client) -> bool:
@@ -156,8 +161,10 @@ async def run(want_pid: int = 0) -> int:
         await _hook(client)
     except PatternFailed:
         await close_handler(handler)
-        logger.error("pet-alt: could not hook that game (left patched by a session that didn't stop "
-                     "cleanly): restart that Wizard101 and log in")
+        logger.error(
+            "pet-alt: could not hook that game. If this version has hooked it before, "
+            "the next start reuses it; otherwise quit that Wizard101 once and log in"
+        )
         return 1
     except TimeoutError:
         await close_handler(handler)

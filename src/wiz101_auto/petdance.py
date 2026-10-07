@@ -74,6 +74,11 @@ async def activate_dance_hook(handler: HookHandler):
     await hook.hook()
     handler._active_hooks[DanceGameMovesHook] = hook
     handler._base_addrs["dance_game_moves"] = hook.dance_game_moves
+    client = getattr(handler, "client", None)
+    if client is not None:
+        from .rehook import remember_installed_hooks
+
+        remember_installed_hooks(client)
 
 
 async def deactivate_dance_hook(handler: HookHandler):
@@ -86,7 +91,7 @@ async def deactivate_dance_hook(handler: HookHandler):
     except Exception as exc:
         logger.warning(
             f"pet: could not lift the dance hook ({exc}). "
-            "Fully quit Wizard101 before the next run if the next start cannot hook."
+            "The next start puts those bytes back and hooks this same game."
         )
         return
     handler._active_hooks.pop(DanceGameMovesHook, None)

@@ -54,7 +54,9 @@ It sells only names that were not in the bag when the run started. Couch
 potato seeds stay. A name shared with an older item, and anything equipped,
 is not clicked. `chores` is the list above. Deaths, low health, a missed zone,
 and an empty snack pile do not stop the session. Stop is the menu bar, or
-`state/stop.request`.
+`state/stop.request`. Stopping the bot leaves Wizard101 open. The next run
+hooks that same window, including when the last run was killed. Quit the
+game only when its window is already gone.
 
 Health under about 60% in a fight casts a death drain on an enemy: Ghoul,
 Wraith, Vampire, Skeletal Dragon, or any other card that steals health.
