@@ -4,9 +4,9 @@ The mob is the one named for that farm, by its template name or the name
 on its plate. Savarstaad casts Deathblade, then Empower, then Scarecrow,
 and passes while the next of those is not ready. If those creatures are
 not loaded, it moves through the pass until one is.
-A pull walks to the aggro edge. It teleports only when the creature is far
-and the wizard is clear of every other one, and that jump lands well outside
-the creature. Standing on one means walking away. Each teleport and walk is
+A pull walks onto the creature. Across the zone, one teleport lands a short
+walk away and the same walk finishes it. A creature that does not fight is
+skipped in place. The next pull walks to another. Each teleport and walk is
 logged before it runs.
 Any other farm casts an area hit from the deck that is already equipped, or
 a single hit, or it passes. Below about 60% health, and only when that next
@@ -64,22 +64,16 @@ SAVARSTAAD_CAMPS = (
 )
 CAMPS = {"seeds": SAVARSTAAD_CAMPS, "splithoof": SAVARSTAAD_CAMPS}
 _camp_at = {"seeds": 0, "splithoof": 0}
-# Closer than this, the wizard is on the creature. Walk away. Never teleport.
-TOO_CLOSE = 400.0
-# Walk to here: inside the 600 aggro radius, outside the creature's body.
-INSIDE_EDGE = 520.0
-# A far teleport lands here, then the wizard walks in. Also the walk-away point.
-OUTSIDE = 1800.0
-# Teleport only when the chosen creature is farther than this.
+# One teleport when the creature is farther than this, then walk the rest.
 FAR = 4000.0
-# And only when every other matching creature is at least this far.
+# That jump lands here. The walk after it goes onto the creature.
+ARRIVE = 800.0
+# Another matching creature closer than this means walk, the jump can wait.
 CLEAR_OF = 1000.0
-# approach_point's default. Pulls pass an explicit gap.
-ENGAGE_GAP = INSIDE_EDGE
+# approach_point's default. The far jump passes ARRIVE on its own.
+ENGAGE_GAP = ARRIVE
 # A creature that did not start a fight, or just died, is left alone this long.
 MISS_FOR = 20.0
-# After walking off a creature, leave it long enough to pick a different one.
-WALK_OUT_FOR = 8.0
 _leave_until: dict[int, float] = {}
 _last_step = ""
 ROUNDS = 30
@@ -147,12 +141,21 @@ def walk_stuck(moved: float, attempted: float) -> bool:
 
 
 def pull_plan(dist: float) -> str:
-    """walk_out on the creature, teleport only when it is far, otherwise walk_in."""
-    if dist < TOO_CLOSE:
-        return "walk_out"
+    """Walk onto a nearby creature. Teleport only when it is across the zone."""
     if dist > FAR:
         return "teleport"
-    return "walk_in"
+    return "walk"
+
+
+def pull_destination(
+    me: tuple[float, float, float],
+    mob: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    """The mob itself, or one short-walk landing when the mob is across the zone."""
+    dist = math.hypot(mob[0] - me[0], mob[1] - me[1])
+    if pull_plan(dist) == "teleport":
+        return approach_point(me, mob, ARRIVE)
+    return mob
 
 
 def teleport_allowed(dist: float, nearest: float | None, *, known: bool) -> bool:
@@ -373,10 +376,9 @@ async def _walk_to(
     *,
     teleport_if_stuck: bool = True,
 ) -> None:
-    """Walk. Never to the creature's own coordinates. The log line is written first.
+    """Walk to this point. The log line is written first.
 
-    Standing on a creature passes teleport_if_stuck=False. A teleport from
-    inside the mesh is what closed the client.
+    teleport_if_stuck is off only when a jump from here is not wanted.
     """
     note_step(f"step=walk why={why} dest=({dest[0]:.0f},{dest[1]:.0f})")
     logger.info(f"farm: {last_step()}")
@@ -400,7 +402,7 @@ async def _pull(
     nearest: float | None,
     known: bool,
 ) -> bool:
-    """Start the fight. Never teleport while on a creature, and never walk onto its origin."""
+    """Walk onto the creature. One teleport first when it is across the zone."""
     try:
         if await client.in_battle():
             logger.info(f"farm: already in a fight with {label or target} gid={gid or 0}")
@@ -410,58 +412,40 @@ async def _pull(
         if _client_closed(exc):
             raise
         return False
-    try:
-        pos = await mob.location()
-        me = await client.body.position()
-    except Exception as exc:
-        logger.info(f"farm: pull positions unread ({type(exc).__name__}: {exc})")
-        if _client_closed(exc):
-            raise
-        return False
-    dist = math.hypot(pos.x - me.x, pos.y - me.y)
-    plan = pull_plan(dist)
-    near_s = "none" if nearest is None else f"{nearest:.0f}"
-    logger.info(
-        f"farm: pulling {label or target} gid={gid or 0} plan={plan} dist={dist:.0f} "
-        f"me=({me.x:.0f},{me.y:.0f},{me.z:.0f}) mob=({pos.x:.0f},{pos.y:.0f},{pos.z:.0f}) "
-        f"nearest_other={near_s} known={str(known).lower()}"
-    )
     if not gid:
         logger.info("farm: this creature has no id, so a miss will not be remembered")
-    mob_xyz = (pos.x, pos.y, pos.z)
+    near_s = "none" if nearest is None else f"{nearest:.0f}"
     try:
-        if plan == "walk_out":
-            away = approach_point((me.x, me.y, me.z), mob_xyz, OUTSIDE)
-            await _walk_to(
-                client,
-                away,
-                f"walk out, gid={gid or 0} was {dist:.0f} away",
-                teleport_if_stuck=False,
-            )
+        for attempt in (1, 2):
             if await client.in_battle():
-                logger.info(f"farm: fight started while walking out gid={gid or 0}")
+                logger.info(f"farm: fight started with gid={gid or 0}")
                 return True
-            leave_alone(gid, WALK_OUT_FOR)
-            logger.info(f"farm: walked clear of gid={gid or 0}; leaving it for {WALK_OUT_FOR:.0f}s")
-            return False
-        if plan == "teleport" and not teleport_allowed(dist, nearest, known=known):
-            logger.info(f"farm: not teleporting; nearest other creature is {near_s}. Walking in")
-            plan = "walk_in"
-        if plan == "teleport":
-            land = approach_point((me.x, me.y, me.z), mob_xyz, OUTSIDE)
-            why = f"outside gid={gid or 0} nearest_other={near_s}"
-            if not await _teleport_to(client, land, why):
-                logger.info("farm: teleport skipped; walking in from here")
-                plan = "walk_in"
-        if plan in {"walk_in", "teleport"}:
             pos = await mob.location()
             me = await client.body.position()
             dist = math.hypot(pos.x - me.x, pos.y - me.y)
-            if dist > INSIDE_EDGE:
-                edge = approach_point((me.x, me.y, me.z), (pos.x, pos.y, pos.z), INSIDE_EDGE)
-                await _walk_to(client, edge, f"aggro edge gid={gid or 0} from {dist:.0f}")
-            else:
-                logger.info(f"farm: already {dist:.0f} from gid={gid or 0}; not walking any closer")
+            mob_xyz = (pos.x, pos.y, pos.z)
+            plan = pull_plan(dist)
+            logger.info(
+                f"farm: pulling {label or target} gid={gid or 0} plan={plan} "
+                f"try={attempt} dist={dist:.0f} "
+                f"me=({me.x:.0f},{me.y:.0f},{me.z:.0f}) "
+                f"mob=({pos.x:.0f},{pos.y:.0f},{pos.z:.0f}) "
+                f"nearest_other={near_s} known={str(known).lower()}"
+            )
+            jumped = (
+                plan == "teleport"
+                and attempt == 1
+                and teleport_allowed(dist, nearest, known=known)
+            )
+            if jumped:
+                land = pull_destination((me.x, me.y, me.z), mob_xyz)
+                if await _teleport_to(client, land, f"near gid={gid or 0}"):
+                    continue
+                logger.info("farm: teleport skipped; walking the whole way")
+            if dist <= 80.0:
+                logger.info(f"farm: reached gid={gid or 0} ({dist:.0f})")
+                break
+            await _walk_to(client, mob_xyz, f"to gid={gid or 0} from {dist:.0f}")
     except Exception as exc:
         logger.info(f"farm: pull step failed ({type(exc).__name__}: {exc})")
         if _client_closed(exc):
@@ -475,11 +459,11 @@ async def _pull(
             if _client_closed(check):
                 raise
         return False
-    return await _wait_for_fight(client, mob, gid)
+    return await _wait_for_fight(client, gid)
 
 
-async def _wait_for_fight(client, mob, gid: int) -> bool:
-    for _ in range(10):
+async def _wait_for_fight(client, gid: int) -> bool:
+    for _ in range(8):
         try:
             if await client.in_battle():
                 logger.info(f"farm: fight started with gid={gid or 0}")
@@ -490,34 +474,16 @@ async def _wait_for_fight(client, mob, gid: int) -> bool:
                 raise
             return False
         await asyncio.sleep(0.4)
-    logger.info(f"farm: gid={gid or 0} did not start a fight; walking clear")
-    try:
-        pos = await mob.location()
-        me = await client.body.position()
-        away = approach_point((me.x, me.y, me.z), (pos.x, pos.y, pos.z), OUTSIDE)
-        await _walk_to(client, away, f"clear after a miss gid={gid or 0}")
-        if await client.in_battle():
-            logger.info(f"farm: fight started while walking clear gid={gid or 0}")
-            return True
-    except Exception as exc:
-        logger.info(f"farm: walk clear failed ({type(exc).__name__}: {exc})")
-        if _client_closed(exc):
-            raise
-        try:
-            if await client.in_battle():
-                logger.info(f"farm: fight started while walking clear gid={gid or 0}")
-                return True
-        except Exception as check:
-            logger.info(f"farm: battle check failed ({type(check).__name__}: {check})")
-            if _client_closed(check):
-                raise
     leave_alone(gid)
-    logger.info(f"farm: leaving gid={gid or 0} alone for {MISS_FOR:.0f}s")
+    logger.info(f"farm: gid={gid or 0} did not start a fight; trying another")
     return False
 
 
 async def _step_off(client, mob) -> bool:
-    """Walk clear of a corpse before the next teleport. False when still on it."""
+    """False while the wizard is still beside the creature it just fought.
+
+    The next pull walks to another creature from here.
+    """
     try:
         pos = await mob.location()
         me = await client.body.position()
@@ -525,29 +491,13 @@ async def _step_off(client, mob) -> bool:
         logger.info(f"farm: could not measure the corpse ({type(exc).__name__}: {exc})")
         if _client_closed(exc):
             raise
-        return False
+        return True
     dist = math.hypot(pos.x - me.x, pos.y - me.y)
     if dist >= CLEAR_OF:
-        logger.info(f"farm: already {dist:.0f} from the fight; no need to walk clear")
+        logger.info(f"farm: {dist:.0f} from the last fight")
         return True
-    try:
-        away = approach_point((me.x, me.y, me.z), (pos.x, pos.y, pos.z), OUTSIDE)
-        await _walk_to(client, away, f"clear of the fight ({dist:.0f})")
-    except Exception as exc:
-        logger.info(f"farm: step off failed ({type(exc).__name__}: {exc})")
-        if _client_closed(exc):
-            raise
-        return False
-    try:
-        if await client.in_battle():
-            logger.info("farm: a fight started while walking off the last one")
-            return False
-    except Exception as exc:
-        logger.info(f"farm: battle check failed ({type(exc).__name__}: {exc})")
-        if _client_closed(exc):
-            raise
-        return False
-    return True
+    logger.info(f"farm: {dist:.0f} from the last fight; next pull walks to another")
+    return False
 
 
 async def fight_one(client, target: str, controller=None) -> bool:
@@ -583,7 +533,7 @@ async def fight_one(client, target: str, controller=None) -> bool:
         leave_alone(gid, 12.0)
         clear = await _step_off(client, mob)
         if await client.in_battle():
-            logger.info("farm: playing the fight that started while walking clear")
+            logger.info("farm: still in a fight; playing it")
             await _play(client, controller, combo=target == "seeds")
             await _note_potato(client)
             clear = False

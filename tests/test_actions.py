@@ -16,6 +16,7 @@ from wiz101_auto.farm import (
     needs_heal,
     next_combo,
     note_step,
+    pull_destination,
     pull_plan,
     resting,
     teleport_allowed,
@@ -99,15 +100,16 @@ def test_a_farm_mob_matches_its_name():
 
 
 def test_a_pull_lands_beside_the_mob_and_a_miss_is_left_alone():
-    land = approach_point((0.0, 0.0, 0.0), (1000.0, 0.0, 5.0), 520.0)
-    assert abs(math.hypot(land[0] - 1000.0, land[1]) - 520.0) < 1.0
-    inside = approach_point((1000.0, 0.0, 5.0), (1000.0, 50.0, 5.0), 1800.0)
-    assert abs(math.hypot(inside[0] - 1000.0, inside[1] - 50.0) - 1800.0) < 1.0
-    assert pull_plan(100) == "walk_out"
-    assert pull_plan(800) == "walk_in"
+    mob = (1000.0, 0.0, 5.0)
+    assert pull_destination((0.0, 0.0, 0.0), mob) == mob
+    land = pull_destination((0.0, 0.0, 0.0), (9000.0, 0.0, 5.0))
+    assert abs(math.hypot(land[0] - 9000.0, land[1]) - 800.0) < 1.0
+    beside = approach_point((0.0, 0.0, 0.0), mob, 800.0)
+    assert abs(math.hypot(beside[0] - 1000.0, beside[1]) - 800.0) < 1.0
+    assert pull_plan(100) == "walk"
+    assert pull_plan(800) == "walk"
+    assert pull_plan(4000) == "walk"
     assert pull_plan(9000) == "teleport"
-    assert pull_plan(400) == "walk_in"
-    assert pull_plan(4000) == "walk_in"
     groups = (("troubled", "splithoof barbarian"), ("splithoof",))
     rows = [
         (None, "Splithoof Barbarian", 9000.0, 5),
