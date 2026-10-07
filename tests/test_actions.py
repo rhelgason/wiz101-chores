@@ -5,6 +5,7 @@ import time
 
 from wiz101_auto.farm import (
     CAMPS,
+    FIGHT_WAIT_POLLS,
     GROUPS,
     NORTHGUARD_GATE,
     already_there,
@@ -162,6 +163,7 @@ def test_a_closer_rager_loses_to_the_named_barbarian():
     assert best_mob(labels, groups) == 1
     assert best_mob([("Tree", 1.0)], groups) is None
     assert len(CAMPS["seeds"]) > 4
+    assert FIGHT_WAIT_POLLS * 0.4 >= 8.0
 
 
 def test_savarstaad_names_the_three_combo_cards():

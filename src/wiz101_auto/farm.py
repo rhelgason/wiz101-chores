@@ -89,6 +89,8 @@ CLEAR_OF = 1000.0
 ENGAGE_GAP = ARRIVE
 # A creature that did not start a fight, or just died, is left alone this long.
 MISS_FOR = 20.0
+# Battle join after a teleport. 3s missed the 23:20 fight, and the loop then waited.
+FIGHT_WAIT_POLLS = 20
 _leave_until: dict[int, float] = {}
 _last_step = ""
 ROUNDS = 30
@@ -390,6 +392,17 @@ async def _hold_forward(client, x: float, y: float) -> tuple[float, float]:
     after = await client.body.position()
     moved = math.hypot(after.x - me.x, after.y - me.y)
     logger.info(f"farm: walk moved {moved:.0f} of {attempted:.0f}")
+    if walk_stuck(moved, attempted):
+        # Posted W moves the dance game. This run's overworld walk moved 0,
+        # so one SendMessage hold is tried before a teleport.
+        from wizwalker.constants import Keycode
+        from wizwalker.utils import timed_send_key
+
+        logger.info("farm: posted W did not move; trying the other key path")
+        await timed_send_key(client.window_handle, Keycode.W, min(max(seconds, 0.3), 2.0))
+        after = await client.body.position()
+        moved = math.hypot(after.x - me.x, after.y - me.y)
+        logger.info(f"farm: other key path moved {moved:.0f} of {attempted:.0f}")
     return moved, attempted
 
 
@@ -488,17 +501,28 @@ async def _pull(
     return await _wait_for_fight(client, gid)
 
 
+async def in_fight(client) -> bool:
+    """True while a duel is on screen, including the join before the cards appear."""
+    try:
+        return bool(await client.in_battle())
+    except Exception as exc:
+        if _client_closed(exc):
+            raise
+        return False
+
+
+async def play_current_fight(client, controller, *, combo: bool = True) -> None:
+    """Play the duel that is already going. Does not walk or teleport."""
+    logger.info("farm: a fight is already going; playing it")
+    await _play(client, controller, combo=combo)
+    await _note_potato(client)
+
+
 async def _wait_for_fight(client, gid: int) -> bool:
-    for _ in range(8):
-        try:
-            if await client.in_battle():
-                logger.info(f"farm: fight started with gid={gid or 0}")
-                return True
-        except Exception as exc:
-            logger.info(f"farm: battle check failed ({type(exc).__name__}: {exc})")
-            if _client_closed(exc):
-                raise
-            return False
+    for _ in range(FIGHT_WAIT_POLLS):
+        if await in_fight(client):
+            logger.info(f"farm: fight started with gid={gid or 0}")
+            return True
         await asyncio.sleep(0.4)
     leave_alone(gid)
     logger.info(f"farm: gid={gid or 0} did not start a fight; trying another")

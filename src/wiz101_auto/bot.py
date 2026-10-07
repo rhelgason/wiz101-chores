@@ -299,8 +299,15 @@ async def chore_loop(client, cfg: Config, controller: Controller, task: dict):
     while not controller.stopped.is_set():
         await controller.checkpoint()
         try:
+            from .farm import in_fight, play_current_fight
+
+            if await in_fight(client):
+                task["name"] = "fight"
+                await play_current_fight(client, controller, combo=False)
+                closed = 0
+                continue
             if not await is_free(client):
-                task["name"] = "waiting (in a fight, dialogue, or loading)"
+                task["name"] = "waiting (dialogue or loading)"
                 await asyncio.sleep(0.4)
                 continue
             if games_requested() is not None:

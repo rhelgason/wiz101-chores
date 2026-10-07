@@ -43,7 +43,8 @@ that next card cannot be cast. If neither creature is loaded where the
 wizard is standing, it goes back to where one was last seen, then through
 the Savarstaad compass spots. Those jumps wait until the zone is free and
 skip the Northguard gate, which was loading the wizard out of the pass.
-It walks onto the creature. Across the zone, one teleport lands a short
+It walks onto the creature. A fight that is already on screen is played;
+the loop does not sit through the card timer. Across the zone, one teleport lands a short
 walk away and that same walk finishes it. A creature that does not fight
 is skipped in place, and the next pull walks to another. Movement keys are
 posted. This Wine build drops the other key path, so a walk that only turns

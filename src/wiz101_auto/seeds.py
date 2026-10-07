@@ -180,6 +180,7 @@ async def seed_loop(client, controller, task: dict) -> None:
 
     book = LootBook()
     closed = 0
+    held = ""
     logger.info(
         "seeds: Savarstaad Pass, Troubled Warriors and Splithoof Barbarians. "
         "Low mana rests in Northguard. A full bag sells only this run's loot "
@@ -188,10 +189,22 @@ async def seed_loop(client, controller, task: dict) -> None:
     while not controller.stopped.is_set():
         await controller.checkpoint()
         try:
+            from .farm import in_fight, play_current_fight
+
+            if await in_fight(client):
+                held = ""
+                task["name"] = "seeds"
+                await play_current_fight(client, controller)
+                closed = 0
+                continue
             if not await is_free(client):
-                task["name"] = "waiting (in a fight, dialogue, or loading)"
+                task["name"] = "waiting (dialogue or loading)"
+                if held != "busy":
+                    logger.info("seeds: in dialogue or a loading screen; waiting")
+                    held = "busy"
                 await asyncio.sleep(0.4)
                 continue
+            held = ""
             await _one_pass(client, controller, task, book)
             closed = 0
         except BotStopped:
