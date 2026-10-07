@@ -6,8 +6,9 @@ and passes while the next of those is not ready. If those creatures are
 not loaded, it moves through the pass until one is.
 A pull walks onto the creature. Across the zone, one teleport lands a short
 walk away and the same walk finishes it. A creature that does not fight is
-skipped in place. The next pull walks to another. Each teleport and walk is
-logged before it runs.
+skipped in place. The next pull walks to another. Camp jumps wait until the
+zone is free and skip the Northguard gate, which loads the wizard out of the
+pass. Each teleport and walk is logged before it runs.
 Any other farm casts an area hit from the deck that is already equipped, or
 a single hit, or it passes. Below about 60% health, and only when that next
 card cannot be cast, the round casts a death drain on an enemy first (Ghoul,
@@ -39,21 +40,22 @@ NEEDLES = {
 }
 # First group wins over a closer creature from a later group.
 GROUPS = {
-    "seeds": (("troubled", "splithoof barbarian"), ("splithoof",)),
-    "splithoof": (("splithoof", "barbarian"),),
+    "seeds": (("troubled", "splithoof barbarian"), ("splithoof", "ghboar")),
+    "splithoof": (("splithoof", "barbarian"), ("ghboar",)),
     "halfang": (("halfang", "bristlecrown"),),
     "early-gold": (("lost soul", "rotten", "dark fairy", "ghoul"),),
 }
-# Compass landmarks in Grizzleheim/GH_Hero (Compass.xml), plus the gate
-# back to Northguard. The camp is one of these; the client only loads the
-# creatures near the wizard.
+# Compass landmarks in Grizzleheim/GH_Hero (Compass.xml). The Northguard
+# gate (-6529.6, -4087.8, 406.5) is not one: standing on it loads Northguard,
+# and the next teleport then runs during that zone change. That closed Wine.
+# The client only loads the creatures near the wizard.
+NORTHGUARD_GATE = (-6529.6, -4087.8, 406.5)
 SAVARSTAAD_CAMPS = (
     (-29892.1, 17385.7, 516.9),
     (-21881.5, -1694.7, -38.1),
     (-7599.6, -432.4, 641.3),
     (-8122.4, -7139.8, 971.1),
     (-7491.8, -4317.8, 501.9),
-    (-6529.6, -4087.8, 406.5),
     (6449.9, -6051.4, 1927.8),
     (22112.1, 1220.5, 601.3),
     (23071.7, 19170.1, 2387.2),
@@ -64,6 +66,19 @@ SAVARSTAAD_CAMPS = (
 )
 CAMPS = {"seeds": SAVARSTAAD_CAMPS, "splithoof": SAVARSTAAD_CAMPS}
 _camp_at = {"seeds": 0, "splithoof": 0}
+# The live zone path. "Savarstaad Pass" never appears in Grizzleheim/GH_Hero.
+ZONE_PATHS = {
+    "seeds": "Grizzleheim/GH_Hero",
+    "splithoof": "Grizzleheim/GH_Hero",
+}
+# Wine dies if camp teleports follow each other. Mobs also stream in late.
+CAMP_GAP = 8.0
+CAMP_SETTLE = 6.0
+LAP_WAIT = 15.0
+RETURN_GAP = 1500.0
+_last_camp = 0.0
+_last_seen: dict[str, tuple[float, float, float]] = {}
+_return_tried = {"seeds": False, "splithoof": False}
 # One teleport when the creature is farther than this, then walk the rest.
 FAR = 4000.0
 # That jump lands here. The walk after it goes onto the creature.
@@ -138,6 +153,15 @@ def walk_seconds(distance: float, speed_bonus: float = 0.0) -> float:
 def walk_stuck(moved: float, attempted: float) -> bool:
     """The hold finished and the wizard is still where it started."""
     return attempted >= 80.0 and moved < 40.0
+
+
+def already_there(here: str, target: str) -> bool:
+    """True in the zone the farm wants. The path counts, not only the display name."""
+    low = (here or "").lower()
+    path = ZONE_PATHS.get(target, "")
+    if path and path.lower() in low:
+        return True
+    return any(place.lower() in low for place in PLACES.get(target, ()))
 
 
 def pull_plan(dist: float) -> str:
@@ -424,6 +448,8 @@ async def _pull(
             me = await client.body.position()
             dist = math.hypot(pos.x - me.x, pos.y - me.y)
             mob_xyz = (pos.x, pos.y, pos.z)
+            _last_seen[target] = mob_xyz
+            _return_tried[target] = False
             plan = pull_plan(dist)
             logger.info(
                 f"farm: pulling {label or target} gid={gid or 0} plan={plan} "
@@ -565,8 +591,8 @@ async def _go(client, target: str) -> bool:
     from .travel_data import _data, named_zone
 
     places = PLACES.get(target, ())
-    here = (await client.zone_name() or "").lower()
-    if any(place.lower() in here for place in places):
+    here = await client.zone_name() or ""
+    if already_there(here, target):
         return True
     try:
         display = _data()[1]
@@ -687,8 +713,10 @@ def _ready(found: list[tuple[object, str, float, int]]) -> list[tuple[object, st
 
 
 def _name_sample(found: list[tuple[object, str, float, int]]) -> str:
-    words = [label for _e, label, _d, _g in found if " " in label]
-    pool = words or [label for _e, label, _d, _g in found if label]
+    labels = [label for _e, label, _d, _g in found if label]
+    boars = [label for label in labels if "boar" in label.lower() or "troubled" in label.lower()]
+    words = [label for label in labels if " " in label]
+    pool = boars or words or labels
     return ", ".join(pool[:8]) or "nothing named"
 
 
@@ -716,12 +744,64 @@ def _picked(found, pick: int, seen, groups):
     return entity, label, gid, nearest_other(seen, gid, groups), True
 
 
+async def _camp_spot(client, target: str) -> tuple[float, float, float]:
+    """Where to look next. The last mob, once, then the next compass point.
+
+    A full lap waits before another. A quiet pass is not a teleport every
+    few seconds: that loop is what closed the Wine client.
+    """
+    camps = CAMPS[target]
+    seen = _last_seen.get(target)
+    if seen is not None and not _return_tried.get(target):
+        dist = None
+        try:
+            me = await client.body.position()
+            dist = math.hypot(seen[0] - me.x, seen[1] - me.y)
+        except Exception as exc:
+            logger.info(f"farm: position unread before a return ({type(exc).__name__}: {exc})")
+            if _client_closed(exc):
+                raise
+        if dist is None or dist > RETURN_GAP:
+            _return_tried[target] = True
+            logger.info(f"farm: going back to the last mob {_pt(seen)}")
+            return seen
+    index = _camp_at.get(target, 0)
+    if index > 0 and index % len(camps) == 0:
+        logger.info("farm: one lap of the pass found no mobs; waiting before another")
+        await asyncio.sleep(LAP_WAIT)
+        _return_tried[target] = False
+    spot = camps[index % len(camps)]
+    _camp_at[target] = index + 1
+    return spot
+
+
+async def _settle_for_mob(client, groups):
+    """Mobs stream in after a jump. Poll until one is named or the wait ends."""
+    deadline = time.monotonic() + CAMP_SETTLE
+    last: list = []
+    while True:
+        seen = await _nearby(client, groups)
+        if seen is None:
+            return None
+        last = seen
+        found = _ready(seen)
+        pick = best_mob([(label, dist) for _e, label, dist, _g in found], groups)
+        if pick is not None:
+            return _picked(found, pick, seen, groups)
+        if time.monotonic() >= deadline:
+            break
+        await asyncio.sleep(1.0)
+    logger.info(f"farm: still no mob after the move ({_name_sample(last)})")
+    return None
+
+
 async def _acquire_mob(client, target: str):
     """The closest preferred mob that was not just fought. Moves on if none are loaded.
 
     Returns (entity, label, gid, nearest_other, known) or None. known is false only
     when a later caller is told the scan failed; a failed scan returns None itself.
     """
+    global _last_camp
     groups = _groups(target)
     seen = await _nearby(client, groups)
     if seen is None:
@@ -754,8 +834,17 @@ async def _acquire_mob(client, target: str):
         logger.info(f"farm: not teleporting to the next camp; a creature is {blocked:.0f} away")
         await asyncio.sleep(2.0)
         return None
-    spot = camps[_camp_at[target] % len(camps)]
-    _camp_at[target] += 1
+    from .world import is_free, wait_until_free
+
+    if not await is_free(client):
+        logger.info("farm: still loading or in a fight; not teleporting")
+        await wait_until_free(client, 8.0)
+        return None
+    spot = await _camp_spot(client, target)
+    wait = CAMP_GAP - (time.monotonic() - _last_camp) if _last_camp else 0.0
+    if wait > 0:
+        logger.info(f"farm: waiting {wait:.0f}s so the last teleport can finish")
+        await asyncio.sleep(wait)
     logger.info(f"farm: no {target} mob loaded ({sample}); moving to another part of the zone")
     try:
         moved = await _teleport_to(client, spot, f"next camp {_pt(spot)}")
@@ -763,23 +852,13 @@ async def _acquire_mob(client, target: str):
         logger.info(f"farm: could not move to the next camp ({type(exc).__name__}: {exc})")
         if _client_closed(exc):
             raise
-        await asyncio.sleep(2.0)
+        await asyncio.sleep(CAMP_GAP)
         return None
     if not moved:
         await asyncio.sleep(2.0)
         return None
-    await asyncio.sleep(1.2)
-    seen = await _nearby(client, groups)
-    if not seen:
-        logger.info("farm: still no mob after the move")
-        return None
-    found = _ready(seen)
-    pick = best_mob([(label, dist) for _e, label, dist, _g in found], groups)
-    if pick is None:
-        skipped = _resting_note(seen, groups)
-        logger.info(f"farm: still no mob after the move ({skipped or sample})")
-        return None
-    return _picked(found, pick, seen, groups)
+    _last_camp = time.monotonic()
+    return await _settle_for_mob(client, groups)
 
 
 async def _ratio(client) -> float | None:

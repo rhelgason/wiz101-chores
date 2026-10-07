@@ -40,12 +40,14 @@ Splithoof Barbarians in Savarstaad Pass until it is stopped. Each round
 casts Deathblade, then Empower, then Scarecrow, and passes while the next
 of those is not ready. A death drain is used only when health is low and
 that next card cannot be cast. If neither creature is loaded where the
-wizard is standing, it moves through the Savarstaad compass spots until
-one is. It walks onto the creature. Across the zone, one teleport lands
-a short walk away and that same walk finishes it. A creature that does not
-fight is skipped in place, and the next pull walks to another. It holds W
-with a posted key, because the game ignores the other key path. The log
-names each teleport and each walk before it runs. Mana under about a third walks to
+wizard is standing, it goes back to where one was last seen, then through
+the Savarstaad compass spots. Those jumps wait until the zone is free and
+skip the Northguard gate, which was loading the wizard out of the pass.
+It walks onto the creature. Across the zone, one teleport lands a short
+walk away and that same walk finishes it. A creature that does not fight
+is skipped in place, and the next pull walks to another. Movement keys are
+posted. This Wine build drops the other key path, so a walk that only turns
+is that path. The log names each teleport and each walk before it runs. Mana under about a third walks to
 Northguard, takes a mana wisp, and comes back. A bag with two slots left
 goes to Elik at the Wizard City Bazaar, presses X, and opens Backpack Buddy.
 It sells only names that were not in the bag when the run started. Couch

@@ -5,6 +5,9 @@ import time
 
 from wiz101_auto.farm import (
     CAMPS,
+    GROUPS,
+    NORTHGUARD_GATE,
+    already_there,
     approach_point,
     best_mob,
     closed_detail,
@@ -12,6 +15,7 @@ from wiz101_auto.farm import (
     is_death_heal,
     leave_alone,
     mob_matches,
+    mob_rank,
     nearest_other,
     needs_heal,
     next_combo,
@@ -135,6 +139,21 @@ def test_a_pull_lands_beside_the_mob_and_a_miss_is_left_alone():
     assert resting(77)
     assert not resting(77, now=time.monotonic() + 60.0)
     assert not resting(0)
+
+
+def test_the_zone_path_is_savarstaad_and_an_unplated_boar_is_a_fallback():
+    assert already_there("Grizzleheim/GH_Hero", "seeds")
+    assert already_there("Savarstaad Pass", "seeds")
+    assert not already_there("Grizzleheim/GH_MainHub", "seeds")
+    assert not already_there("", "seeds")
+    groups = GROUPS["seeds"]
+    assert mob_rank("GH-Boar-1-R3", groups) == 1
+    assert mob_rank("GH-Boar-1-R3 Splithoof Barbarian", groups) == 0
+    assert mob_rank("Splithoof Rager", groups) == 1
+    labels = [("GH-Boar-1-R3", 10.0), ("Splithoof Barbarian", 80.0)]
+    assert best_mob(labels, groups) == 1
+    assert NORTHGUARD_GATE not in CAMPS["seeds"]
+    assert NORTHGUARD_GATE not in CAMPS["splithoof"]
 
 
 def test_a_closer_rager_loses_to_the_named_barbarian():

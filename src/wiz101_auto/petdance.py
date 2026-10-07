@@ -125,14 +125,15 @@ def _user32_post(window_handle: int):
     return post
 
 
-async def post_key(window_handle: int, key: str, seconds: float = 0.3, *, post=None) -> None:
+async def post_key(window_handle: int, key: str | int, seconds: float = 0.3, *, post=None) -> None:
     """Hold one key with PostMessageW, the same path the dance arrows use.
 
     wizwalker's send_key uses SendMessageW. On this Wine build those taps
     never opened the dance sigil; the arrows, posted this way, did.
+    `key` is a character or a virtual-key code (Keycode.W is 87).
     """
     send = post or _user32_post(window_handle)
-    vk = ord(key)
+    vk = key if isinstance(key, int) else ord(key)
     end = time.monotonic() + max(seconds, 0.05)
     while True:
         send(WM_KEYDOWN, vk, 0)
@@ -140,6 +141,47 @@ async def post_key(window_handle: int, key: str, seconds: float = 0.3, *, post=N
             break
         await asyncio.sleep(0.05)
     send(WM_KEYUP, vk, 0)
+
+
+def install_wine_keys(client) -> None:
+    """Movement and hotkeys go through PostMessageW.
+
+    wizwalker's send_key and goto use SendMessageW. On this Wine build that
+    call often never arrives, so the wizard turns and stays put. The dance
+    arrows already post their keys. This replaces those two methods before
+    the pause gate wraps send_key. Teleport is unchanged.
+    """
+    if getattr(client, "_wine_keys", False):
+        return
+
+    async def send_key(key, seconds: float = 0.0):
+        vk = int(getattr(key, "value", key))
+        await post_key(client.window_handle, vk, float(seconds or 0.05))
+
+    async def goto(x: float, y: float):
+        from wizwalker.utils import XYZ, calculate_perfect_yaw
+
+        client_obj = client.client_object
+        body = await client_obj.actor_body()
+        if body is None:
+            body = client.body
+        current = await body.position()
+        try:
+            bonus = float(await client_obj.speed_multiplier())
+        except Exception:
+            bonus = 0.0
+        factor = (bonus / 100.0) + 1.0
+        if factor <= 0.05:
+            factor = 1.0
+        target = XYZ(float(x), float(y), current.z)
+        distance = current - target
+        seconds = 0.0 if distance <= 1.0 else distance / (580.0 * factor)
+        await body.write_yaw(calculate_perfect_yaw(current, target))
+        await post_key(client.window_handle, 87, seconds)
+
+    client.send_key = send_key
+    client.goto = goto
+    client._wine_keys = True
 
 
 def first_number(text: str) -> int | None:

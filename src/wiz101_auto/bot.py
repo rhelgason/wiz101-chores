@@ -154,9 +154,11 @@ async def connect(handler: ClientHandler):
             "as Administrator."
         ) from None
     logger.success("connected to the game")
+    from .petdance import install_wine_keys
     from .safe_teleport import install
 
     install(client)
+    install_wine_keys(client)
     return client
 
 
