@@ -199,13 +199,8 @@ def stop(timeout: float = 30.0) -> int:
             return 0
         time.sleep(0.5)
         print(".", end="", flush=True)
-    print(" still running; force-killing. Restart Wizard101 before the next run (hooks were left in).")
-    if sys.platform == "win32":
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
-    else:
-        os.kill(pid, 9)
-    PID_FILE.unlink(missing_ok=True)
-    STOP_FILE.unlink(missing_ok=True)
+    # Never force-kill: that leaves the mouse hook in the game and skips the hook record.
+    print(" still running. The stop request stays; it stops on its next check.")
     return 2
 
 

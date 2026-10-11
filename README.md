@@ -47,16 +47,29 @@ next start fails until Wizard101 is fully restarted.
 or `python -m wiz101_auto stop`. That unhooks the game. Ctrl+Shift+Q does the
 same from inside the bottle. Ctrl+Shift+P pauses.
 
-On this Mac the game is the Windows client inside Wizard101.app's own Wine.
-`mac/run.sh` starts the bot in that bottle and opens the menu bar stop.
-CrossOver.app is not used for it. See PLAYBOOK.md.
+On this Mac the game is the Windows client inside Wizard101.app's own Wine,
+and only two modes run there, both without teleports:
+
+```bash
+./mac/run.sh pet     # walks to the Pet Pavilion and the dance sigil, from anywhere
+./mac/run.sh seeds   # walks to Boar Camp in Savarstaad Pass, from anywhere
+python3 mac/navcheck.py --trip WizardCity/WC_Streets/Interiors/WC_PET_Park Grizzleheim/GH_Hero
+```
+
+Travel walks the game's own paths (each zone's `zone.nav`) and takes the
+spiral door between worlds.
+
+Each run writes `logs/runs/<time>-<mode>/`. If Wizard101 dies during a run,
+`CRASH.md` in that folder says what the bot was doing, what the game's crash
+dump points at, and what the game log said. See PLAYBOOK.md, "Why the Mac
+client crashed".
 
 `config.yaml` is created from `configs/chores.yaml`. See `config.example.yaml`.
 
 | Command | What |
 |---|---|
-| `mac/run.sh` | on this Mac: the day plan inside the Wizard101 bottle, and the menu bar stop |
-| `mac/run.sh seeds` / `mac/run.sh pet` | that mode, instead of whatever `config.yaml` says |
+| `mac/run.sh pet` / `mac/run.sh seeds` | on this Mac: that mode inside the Wizard101 bottle, the menu bar stop, and the crash watcher |
+| `python3 mac/crashwatch.py dump <file.dmp>` | read a Wizard101 crash dump |
 | `stop` | unhook and quit, including from the Mac side |
 | `run` | the day plan (`-m pet`, `-m reagents`, or `-m seeds`) |
 | `pet [--games N]` | dance now, ahead of the plan |

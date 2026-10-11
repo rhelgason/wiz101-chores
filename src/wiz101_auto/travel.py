@@ -203,10 +203,6 @@ async def spiral_to(client, world: str, spot=None) -> bool:
     if place is not None:
         await client.teleport(place)
         await asyncio.sleep(0.8)
-        closer = await entity_pos(client, DOOR_NEEDLES)
-        if closer is not None:
-            await client.teleport(closer)
-            await asyncio.sleep(0.4)
     else:
         logger.info("no world door marker; trying the prompt in this room")
     for _ in range(12):
@@ -266,7 +262,17 @@ async def _walk_gate(client, pos, zone: str) -> bool:
 
 
 async def go_to_zone(client, dest: str, max_hops: int = MAX_HOPS) -> bool:
-    """Walk gates to `dest`. Another world is the world door, then its gates."""
+    """Walk gates to `dest`. Another world is the world door, then its gates.
+
+    A walk-only client (the Mac) goes on foot with navigate.py, on the
+    game's own paths; the code below teleports to each gate (Windows).
+    """
+    if getattr(client, "_walk_only", False):
+        from .navigate import go_to_zone as walk_to_zone
+
+        return await walk_to_zone(
+            client, dest, getattr(client, "_controller", None), getattr(client, "_on_fight", None)
+        )
     from .travel_data import _data
 
     blocked: set[tuple[str, str]] = set()

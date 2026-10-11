@@ -22,10 +22,13 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 import re
 import time
 
 from loguru import logger
+
+from . import blackbox
 
 PLACES = {
     "splithoof": ("Savarstaad Pass", "Boar Camp"),
@@ -58,7 +61,6 @@ SAVARSTAAD_CAMPS = (
     (-8122.4, -7139.8, 971.1),
     (-7491.8, -4317.8, 501.9),
     (6449.9, -6051.4, 1927.8),
-    (22112.1, 1220.5, 601.3),
     (23071.7, 19170.1, 2387.2),
     (11919.6, 19511.6, 1213.5),
     (7398.4, 37146.1, 1515.3),
@@ -313,6 +315,12 @@ def is_death_heal(name: str, effects: list[str] | None = None) -> bool:
     return bool(kinds & DRAIN_EFFECTS)
 
 
+async def _here(client):
+    from .walk import here
+
+    return await here(client)
+
+
 def _pt(point: tuple[float, float, float]) -> str:
     return f"({point[0]:.0f},{point[1]:.0f},{point[2]:.0f})"
 
@@ -334,17 +342,14 @@ async def _hook_busy(client) -> bool | None:
 
 async def _log_where(client, what: str) -> None:
     try:
-        me = await client.body.position()
+        me = await _here(client)
         fighting = await client.in_battle()
     except Exception as exc:
         logger.info(f"farm: {what} position unread ({type(exc).__name__}: {exc})")
         if _client_closed(exc):
             raise
         return
-    logger.info(
-        f"farm: {what} at ({me.x:.0f},{me.y:.0f},{me.z:.0f}) "
-        f"in_battle={str(bool(fighting)).lower()}"
-    )
+    logger.info(f"farm: {what} at ({me.x:.0f},{me.y:.0f},{me.z:.0f}) in_battle={str(bool(fighting)).lower()}")
 
 
 async def _teleport_to(
@@ -367,9 +372,7 @@ async def _teleport_to(
         if fighting:
             logger.info(f"farm: skipping teleport ({why}); a fight is already on screen")
         else:
-            logger.info(
-                f"farm: skipping teleport ({why}); the last mob's fight may still be joining"
-            )
+            logger.info(f"farm: skipping teleport ({why}); the last mob's fight may still be joining")
         return False
     busy = await _hook_busy(client)
     if busy:
@@ -426,7 +429,7 @@ async def _hold_forward(client, x: float, y: float) -> tuple[float, float]:
 
     from .petdance import post_key
 
-    me = await client.body.position()
+    me = await _here(client)
     attempted = math.hypot(x - me.x, y - me.y)
     if attempted < 20.0:
         logger.info(f"farm: already at the walk point ({attempted:.0f})")
@@ -436,7 +439,7 @@ async def _hold_forward(client, x: float, y: float) -> tuple[float, float]:
     await _face(client, yaw)
     logger.info(f"farm: posting W for {seconds:.1f}s yaw={yaw:.2f} toward ({x:.0f},{y:.0f})")
     await post_key(client.window_handle, "W", seconds)
-    after = await client.body.position()
+    after = await _here(client)
     moved = math.hypot(after.x - me.x, after.y - me.y)
     logger.info(f"farm: walk moved {moved:.0f} of {attempted:.0f}")
     if walk_stuck(moved, attempted):
@@ -447,7 +450,7 @@ async def _hold_forward(client, x: float, y: float) -> tuple[float, float]:
 
         logger.info("farm: posted W did not move; trying the other key path")
         await timed_send_key(client.window_handle, Keycode.W, min(max(seconds, 0.3), 2.0))
-        after = await client.body.position()
+        after = await _here(client)
         moved = math.hypot(after.x - me.x, after.y - me.y)
         logger.info(f"farm: other key path moved {moved:.0f} of {attempted:.0f}")
     return moved, attempted
@@ -468,9 +471,15 @@ async def _walk_to(
     logger.info(f"farm: {last_step()}")
     moved, attempted = await _hold_forward(client, dest[0], dest[1])
     if walk_stuck(moved, attempted) and teleport_if_stuck:
+        if os.environ.get("WINEPREFIX"):
+            logger.warning(
+                f"farm: W did not move the wizard ({moved:.0f} of {attempted:.0f}); "
+                "skipping the unstick teleport in Wine"
+            )
+            await _log_where(client, f"after {why}")
+            return
         logger.info(
-            f"farm: W did not move the wizard ({moved:.0f} of {attempted:.0f}); "
-            "teleporting to the same point"
+            f"farm: W did not move the wizard ({moved:.0f} of {attempted:.0f}); teleporting to the same point"
         )
         await _teleport_to(client, dest, f"unstick {why}")
         return
@@ -504,7 +513,7 @@ async def _pull(
                 logger.info(f"farm: fight started with gid={gid or 0}")
                 return True
             pos = await mob.location()
-            me = await client.body.position()
+            me = await _here(client)
             dist = math.hypot(pos.x - me.x, pos.y - me.y)
             mob_xyz = (pos.x, pos.y, pos.z)
             _last_seen[target] = mob_xyz
@@ -517,11 +526,7 @@ async def _pull(
                 f"mob=({pos.x:.0f},{pos.y:.0f},{pos.z:.0f}) "
                 f"nearest_other={near_s} known={str(known).lower()}"
             )
-            jumped = (
-                plan == "teleport"
-                and attempt == 1
-                and teleport_allowed(dist, nearest, known=known)
-            )
+            jumped = plan == "teleport" and attempt == 1 and teleport_allowed(dist, nearest, known=known)
             if jumped:
                 land = pull_destination((me.x, me.y, me.z), mob_xyz)
                 if await _teleport_to(client, land, f"near gid={gid or 0}"):
@@ -549,14 +554,14 @@ async def _pull(
 
 
 def fight_visible(in_battle: bool | None, cards: int, windows: set[str]) -> bool:
-    """A duel is on screen.
+    """A duel is on screen: the duel phase says so, or a battle-only window is up.
 
-    The duel phase said the 23:20 fight had not started while the battle
-    window was up. Visible hand cards or combatant frames count on their own.
+    Visible hand cards (SpellCheckBox) are not proof: this account shows 7 of
+    them outside any duel, and that alone started phantom fights on 10-07
+    10:59 (pet) and 10-10 19:36 (seeds, which then never moved). Combatant
+    frames and the end-of-duel window still count when the phase lags.
     """
     if in_battle:
-        return True
-    if cards > 0:
         return True
     found = {name.lower() for name in windows}
     return "combatantcontrol" in found or "donewindow" in found
@@ -640,8 +645,7 @@ async def _wait_for_fight(client, gid: int) -> bool:
             missed = phase_disagrees(phase, cards, names)
             if missed:
                 logger.info(
-                    f"farm: fight started with gid={gid or 0}; "
-                    f"the duel phase had not caught up ({missed})"
+                    f"farm: fight started with gid={gid or 0}; the duel phase had not caught up ({missed})"
                 )
             else:
                 logger.info(f"farm: fight started with gid={gid or 0}")
@@ -664,7 +668,7 @@ async def _step_off(client, mob) -> bool:
     """
     try:
         pos = await mob.location()
-        me = await client.body.position()
+        me = await _here(client)
     except Exception as exc:
         logger.info(f"farm: could not measure the corpse ({type(exc).__name__}: {exc})")
         if _client_closed(exc):
@@ -723,9 +727,7 @@ async def fight_one(client, target: str, controller=None) -> bool:
     except Exception as exc:
         if _client_closed(exc):
             raise
-        logger.info(
-            f"farm: the pull failed ({type(exc).__name__}: {exc}); gathering health and going back"
-        )
+        logger.info(f"farm: the pull failed ({type(exc).__name__}: {exc}); gathering health and going back")
         try:
             await _recover(client, controller)
         except BotStopped:
@@ -825,7 +827,7 @@ async def _nearby(client, groups: tuple[tuple[str, ...], ...]) -> list[tuple[obj
             raise
         return None
     try:
-        me = await client.body.position()
+        me = await _here(client)
     except Exception as exc:
         logger.info(f"farm: wizard position unread ({type(exc).__name__}: {exc})")
         if _client_closed(exc):
@@ -907,7 +909,7 @@ async def _camp_spot(client, target: str) -> tuple[float, float, float]:
     if seen is not None and not _return_tried.get(target):
         dist = None
         try:
-            me = await client.body.position()
+            me = await _here(client)
             dist = math.hypot(seen[0] - me.x, seen[1] - me.y)
         except Exception as exc:
             logger.info(f"farm: position unread before a return ({type(exc).__name__}: {exc})")
@@ -964,15 +966,10 @@ async def _acquire_mob(client, target: str):
     pick = best_mob([(label, dist) for _e, label, dist, _g in found], groups)
     if pick is not None:
         return _picked(found, pick, seen, groups)
-    resting_match = any(
-        resting(gid) and mob_rank(label, groups) is not None for _e, label, _d, gid in seen
-    )
+    resting_match = any(resting(gid) and mob_rank(label, groups) is not None for _e, label, _d, gid in seen)
     if resting_match:
         skipped = _resting_note(seen, groups)
-        logger.info(
-            "farm: the nearby creatures just failed to fight; waiting "
-            f"({skipped or 'no ids'})"
-        )
+        logger.info(f"farm: the nearby creatures just failed to fight; waiting ({skipped or 'no ids'})")
         await asyncio.sleep(4.0)
         return None
     camps = CAMPS.get(target)
@@ -1087,9 +1084,7 @@ async def _wisp(client, *, allow_teleport: bool = True) -> bool:
         return False
     try:
         pos = await wisp.location()
-        moved = await _teleport_to(
-            client, (pos.x, pos.y, pos.z), "health wisp", engage=False
-        )
+        moved = await _teleport_to(client, (pos.x, pos.y, pos.z), "health wisp", engage=False)
     except Exception as exc:
         logger.info(f"farm: could not reach a health wisp ({type(exc).__name__}: {exc})")
         if _client_closed(exc):
@@ -1132,29 +1127,51 @@ def combo_spell(name: str) -> str | None:
         return "deathblade"
     if "scarecrow" in flat:
         return "scarecrow"
-    if re.search(r"\bempower\b", low):
+    # Letters only: an internal name like "Spell_Empower" has no word break before
+    # "empower", which hid the card on 10-10. Empowerment is a different spell.
+    if "empower" in flat and "empowerment" not in flat and "empowered" not in flat:
         return "empower"
     return None
 
 
 def next_combo(done: list[str], castable: set[str], in_hand: set[str]) -> str | None:
-    """The next Savarstaad card, or None to pass.
+    """The next Savarstaad card, or None to pass (kept for its tests; plan_round decides now)."""
+    hand = [{"spell": sp, "castable": sp in castable} for sp in sorted(in_hand)]
+    action = plan_round(hand, done)
+    return hand[action[1]]["spell"] if action[0] == "cast" else None
 
-    Empower, then Scarecrow. Deathblade is not in the sequence, so a blade
-    in hand does not delay Empower. A sequence card that is in hand but not
-    castable yet is waited on. One that is not in hand is skipped.
+
+def plan_round(hand: list[dict], done: list[str], heal: bool = False) -> tuple:
+    """One round of the Savarstaad farm. `hand` is one dict per card:
+    spell ('empower' | 'scarecrow' | None), castable, keep (a treasure or item
+    card: never discarded), drain (a death drain).
+
+    ('drain',) when health is low and Scarecrow cannot go; ('cast', i);
+    ('discard', [i, ...]) when Scarecrow is not in hand at all, so the next
+    draw can bring it; else ('pass',). Empower goes first, once per fight,
+    whenever it is castable: it no longer holds Scarecrow back while it waits
+    for pips, and Scarecrow no longer waits forever for a card never drawn.
     """
-    finished = set(done)
-    for step in COMBO:
-        if step in finished:
-            continue
-        if step in castable:
-            return step
-        if step in in_hand:
-            return None
-    if "scarecrow" in castable:
-        return "scarecrow"
-    return None
+    scarecrow = [i for i, c in enumerate(hand) if c.get("spell") == "scarecrow" and c.get("castable")]
+    empower_ready = "empower" not in done
+    empower = [i for i, c in enumerate(hand) if c.get("spell") == "empower" and c.get("castable")]
+    if heal and not scarecrow:
+        return ("drain",)
+    if empower and empower_ready:
+        return ("cast", empower[0])
+    if scarecrow:
+        return ("cast", scarecrow[0])
+    if not any(c.get("spell") == "scarecrow" for c in hand):
+        junk = [
+            i
+            for i, c in enumerate(hand)
+            if not c.get("keep")
+            and not c.get("drain")
+            and not (c.get("spell") == "empower" and empower_ready)
+        ]
+        if junk:
+            return ("discard", junk)
+    return ("pass",)
 
 
 async def _planning_ready(handler) -> bool | None:
@@ -1196,6 +1213,7 @@ async def _play(client, controller, combo: bool = False):
     announced = False
     missing = 0
     idle = 0
+    phantom = 0
     casts = 0
     while casts < ROUNDS:
         if controller:
@@ -1208,9 +1226,7 @@ async def _play(client, controller, combo: bool = False):
         if not fight_visible(phase, cards, names):
             missing += 1
             if missing >= 3:
-                logger.info(
-                    f"farm: the fight window is gone (phase_in_battle={phase}, cards={cards})"
-                )
+                logger.info(f"farm: the fight window is gone (phase_in_battle={phase}, cards={cards})")
                 return
             await asyncio.sleep(0.4)
             continue
@@ -1234,6 +1250,23 @@ async def _play(client, controller, combo: bool = False):
             await asyncio.sleep(0.4)
             continue
         idle = 0
+        if phase is not True:
+            # The phase says no duel and only windows say yes: a real hand settles it.
+            try:
+                hand = len(await handler.get_cards())
+            except Exception as exc:
+                if _client_closed(exc):
+                    raise
+                hand = 0
+            if hand == 0:
+                phantom += 1
+                if phantom >= 3:
+                    logger.info("farm: no duel after all (no duel phase, no hand); moving on")
+                    blackbox.event("phantom_fight", windows=sorted(names), cards=cards)
+                    return
+                await asyncio.sleep(0.5)
+                continue
+        phantom = 0
         casts += 1
         try:
             if combo:
@@ -1242,6 +1275,7 @@ async def _play(client, controller, combo: bool = False):
                 await _cast_or_pass(handler, heal=needs_heal(ratio))
         except Exception as exc:
             logger.info(f"farm: round failed ({exc}); passing")
+            blackbox.event("round_failed", error=f"{type(exc).__name__}: {exc}")
             try:
                 await handler.pass_button()
             except Exception as pass_exc:
@@ -1251,38 +1285,87 @@ async def _play(client, controller, combo: bool = False):
     logger.info("farm: stopped after the round limit")
 
 
-async def _cast_combo(handler, done: list[str], heal: bool = False) -> str:
-    """Empower on the wizard, then Scarecrow on the fight."""
-    cards = []
+async def _read_hand(handler) -> list[tuple[object, dict]]:
+    out = []
     for card in await handler.get_cards():
         try:
-            castable = await card.is_castable()
             name = await _card_name(card)
-        except Exception:
+            castable = await card.is_castable()
+        except Exception as exc:
+            if _client_closed(exc):
+                raise
             continue
-        spell = combo_spell(name)
-        if spell:
-            cards.append((card, spell, castable))
-    in_hand = {spell for _card, spell, _ok in cards}
-    castable = {spell for _card, spell, ok in cards if ok}
-    step = next_combo(done, castable, in_hand)
-    if step is None and heal:
+        keep = False
+        for check in ("is_treasure_card", "is_item_card"):
+            try:
+                keep = keep or bool(await getattr(card, check)())
+            except Exception:
+                keep = True  # unread: do not throw it away
+        info = {
+            "name": name,
+            "spell": combo_spell(name),
+            "castable": castable,
+            "keep": keep,
+            "drain": is_death_heal(name),
+        }
+        out.append((card, info))
+    return out
+
+
+async def _cast_on_self(handler, card) -> None:
+    """Self-target: the member's Health text, else its whole frame (the Health
+    child was missing once on 10-10 and the round was lost)."""
+    member = await handler.get_client_member()
+    try:
+        await card.cast(member)
+    except ValueError:
+        await handler.client.mouse_handler.click_window(member._combatant_control)
+
+
+async def _cast_combo(handler, done: list[str], heal: bool = False) -> str:
+    """Empower on the wizard, then Scarecrow; dig for Scarecrow by discarding."""
+    hand = await _read_hand(handler)
+    infos = [info for _card, info in hand]
+    action = plan_round(infos, done, heal)
+    if action[0] == "drain":
         drained = await _cast_drain(handler)
         if drained:
             return drained
         logger.info("farm: health is low and no death drain is in hand")
-    if step is None:
-        await handler.pass_button()
-        logger.info("farm: passing until Empower or Scarecrow is ready")
-        return "pass"
-    card = next(card for card, spell, ok in cards if spell == step and ok)
-    if step == "scarecrow":
-        await card.cast(None)
-    else:
-        await card.cast(await handler.get_client_member())
-    done.append(step)
-    logger.info(f"farm: casting {step}")
-    return step
+        action = plan_round(infos, done, False)
+    if action[0] == "cast":
+        card, info = hand[action[1]]
+        step = info["spell"]
+        if step == "scarecrow":
+            await card.cast(None)
+        else:
+            await _cast_on_self(handler, card)
+        done.append(step)
+        logger.info(f"farm: casting {step}")
+        blackbox.event("cast", spell=step)
+        return step
+    if action[0] == "discard":
+        names = [hand[i][1]["name"] for i in action[1]]
+        logger.info(f"farm: no Scarecrow in hand; discarding {', '.join(names)} to draw for it")
+        blackbox.event("discard", cards=names)
+        for i in sorted(action[1], reverse=True):  # from the right, so earlier windows stay put
+            try:
+                await hand[i][0].discard(sleep_time=0.4)
+            except Exception as exc:
+                if _client_closed(exc):
+                    raise
+                logger.info(f"farm: discard failed ({exc})")
+                break
+    await handler.pass_button()
+    shown = ", ".join(f"{i['name']}{'' if i['castable'] else ' (not castable)'}" for i in infos) or "nothing"
+    logger.info(f"farm: passing; hand: {shown}")
+    blackbox.event(
+        "cast",
+        spell="pass",
+        hand=[i["name"] for i in infos],
+        castable=[i["name"] for i in infos if i["castable"]],
+    )
+    return "pass"
 
 
 async def _card_name(card) -> str:
@@ -1339,6 +1422,7 @@ async def _cast_drain(handler) -> str | None:
             continue
         await card.cast(enemies[0])
         logger.info(f"farm: health is low; casting {name or 'a death drain'}")
+        blackbox.event("cast", spell=name or "death drain", why="low health")
         return "heal"
     return None
 

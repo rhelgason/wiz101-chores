@@ -13,12 +13,27 @@ from .config import MODES, load_config
 ACTIVITY_LOG = "activity.log"
 
 
-def _setup_logging(log_file: str | None, verbose: bool):
+def _ours(record) -> bool:
+    return not record["name"].startswith("wizwalker")
+
+
+def _run_log_filter(record) -> bool:
+    # WizWalker's own debug lines (hook addresses, bytes written) are kept,
+    # except its twice-a-second "waiting for address" poll.
+    return _ours(record) or "aiting for address" not in record["message"]
+
+
+def _setup_logging(log_file: str | None, verbose: bool, run_dir=None):
+    """Terminal, wiz101-auto.log, activity.log, and the run folder's bot.log.
+
+    diagnose is off everywhere: with it, one failed 4100-byte write printed
+    those 4100 bytes into every frame of the traceback.
+    """
     logger.remove()
     fmt = "<green>{time:HH:mm:ss}</green> {message}"
-    logger.add(sys.stderr, level="DEBUG" if verbose else "INFO", format=fmt)
+    logger.add(sys.stderr, level="DEBUG" if verbose else "INFO", format=fmt, filter=_ours, diagnose=False)
     if log_file:
-        logger.add(log_file, level="DEBUG", rotation="10 MB", retention=5)
+        logger.add(log_file, level="DEBUG", rotation="10 MB", retention=5, filter=_ours, diagnose=False)
         logger.add(
             ACTIVITY_LOG,
             level="INFO",
@@ -26,6 +41,19 @@ def _setup_logging(log_file: str | None, verbose: bool):
             rotation="5 MB",
             retention=3,
             encoding="utf-8",
+            filter=_ours,
+            diagnose=False,
+        )
+    if run_dir is not None:
+        logger.enable("wizwalker")
+        logger.add(
+            str(run_dir / "bot.log"),
+            level="DEBUG",
+            format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <7} | {name}:{function}:{line} | {message}",
+            encoding="utf-8",
+            filter=_run_log_filter,
+            diagnose=False,
+            backtrace=True,
         )
 
 
@@ -108,6 +136,7 @@ def main(argv: list[str] | None = None):
     run_p.add_argument("-c", "--config", default=None, help="path to config YAML")
     run_p.add_argument("-m", "--mode", choices=list(MODES), help="override config mode")
     run_p.add_argument("-v", "--verbose", action="store_true")
+    run_p.add_argument("--run-dir", default=None, help="folder for this run's logs (mac/run.sh makes one)")
 
     sub.add_parser("relog", help="quit to character select and play again (bot stopped)")
     sub.add_parser("set-login", help="save the game login (Windows Credential Manager) for game restarts")
@@ -251,6 +280,10 @@ def main(argv: list[str] | None = None):
         return 0
     if args.command == "pet-alt":
         from . import petclient
+        from .bot import in_wine
+
+        if in_wine():
+            raise SystemExit("pet-alt is off on the Mac: it unhooks and rehooks a second game window.")
 
         if args.action == "run":
             return petclient.main_run(args.pid)
@@ -264,7 +297,23 @@ def main(argv: list[str] | None = None):
     cfg = load_config(args.config)
     if args.mode:
         cfg.mode = args.mode
-    _setup_logging(cfg.log_file, args.verbose)
+    import os
+
+    from . import __version__, blackbox
+
+    run_dir = blackbox.run_folder(cfg.mode, args.run_dir or os.environ.get("WIZ_RUN_DIR"))
+    box = blackbox.start(run_dir)
+    _setup_logging(cfg.log_file, args.verbose, run_dir)
+    logger.info(f"wiz101-auto {__version__}; this run's logs: {run_dir}")
+    box.write_json("bot_env.json", {
+        "version": __version__,
+        "python": sys.version,
+        "argv": sys.argv,
+        "config": args.config,
+        "mode": cfg.mode,
+        "seeds": vars(cfg.seeds),
+        "safety": {k: v for k, v in vars(cfg.safety).items()},
+    })
 
     from .bot import run
 

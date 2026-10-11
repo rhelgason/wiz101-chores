@@ -1,7 +1,9 @@
 """Garden, hatch, and farm decisions that do not need the game."""
 
+import asyncio
 import math
 import time
+from types import SimpleNamespace
 
 from wiz101_auto.farm import (
     CAMPS,
@@ -160,6 +162,8 @@ def test_the_zone_path_is_savarstaad_and_an_unplated_boar_is_a_fallback():
     assert best_mob(labels, groups) == 1
     assert NORTHGUARD_GATE not in CAMPS["seeds"]
     assert NORTHGUARD_GATE not in CAMPS["splithoof"]
+    assert (22112.1, 1220.5, 601.3) not in CAMPS["seeds"]
+    assert (22112.1, 1220.5, 601.3) not in CAMPS["splithoof"]
 
 
 def test_a_closer_rager_loses_to_the_named_barbarian():
@@ -177,6 +181,39 @@ def test_no_teleport_while_a_nearby_fight_may_be_joining():
     assert unstick_allowed(JOIN_HOLD - 0.1) is False
     assert unstick_allowed(JOIN_HOLD) is True
     assert unstick_allowed(30.0, fighting=True) is False
+
+
+def test_a_stuck_walk_skips_the_unsafe_teleport_in_wine(monkeypatch):
+    from wiz101_auto import farm
+
+    class Body:
+        async def position(self):
+            return SimpleNamespace(x=0, y=0, z=0)
+
+    class Client:
+        body = Body()
+
+        async def in_battle(self):
+            return False
+
+    teleports = []
+
+    async def hold_forward(*_args):
+        return 0.0, 200.0
+
+    async def teleport(*_args, **_kwargs):
+        teleports.append(True)
+
+    monkeypatch.setattr(farm, "_hold_forward", hold_forward)
+    monkeypatch.setattr(farm, "_teleport_to", teleport)
+    monkeypatch.delenv("WINEPREFIX", raising=False)
+    asyncio.run(farm._walk_to(Client(), (200.0, 0.0, 0.0), "windows-test"))
+    assert teleports == [True]
+
+    teleports.clear()
+    monkeypatch.setenv("WINEPREFIX", "/wine/bottle")
+    asyncio.run(farm._walk_to(Client(), (200.0, 0.0, 0.0), "wine-test"))
+    assert teleports == []
 
 
 def test_savarstaad_names_the_three_combo_cards():
@@ -202,10 +239,51 @@ def test_seeds_combo_is_empower_then_scarecrow():
 def test_a_visible_battle_counts_when_the_phase_says_it_ended():
     assert fight_visible(False, 0, set()) is False
     assert fight_visible(True, 0, set()) is True
-    assert fight_visible(False, 3, set()) is True
+    assert fight_visible(False, 7, set()) is False  # 7 card windows stay visible out of battle (10-10 19:36)
     assert fight_visible(False, 0, {"CombatantControl"}) is True
     assert fight_visible(False, 0, {"Focus"}) is False
-    assert fight_visible(None, 1, set()) is True
+    assert fight_visible(None, 1, set()) is False
     missed = phase_disagrees(False, 2, {"DoneWindow"})
     assert "cards=2" in missed and "DoneWindow" in missed
     assert phase_disagrees(True, 2, {"DoneWindow"}) == ""
+
+
+def card(spell=None, castable=True, keep=False, drain=False):
+    return {"spell": spell, "castable": castable, "keep": keep, "drain": drain, "name": spell or "junk"}
+
+
+def test_round_plan_empower_then_scarecrow():
+    from wiz101_auto.farm import plan_round
+
+    hand = [card("scarecrow"), card("empower")]
+    assert plan_round(hand, []) == ("cast", 1)
+    assert plan_round(hand, ["empower"]) == ("cast", 0)
+
+
+def test_round_plan_does_not_hold_scarecrow_for_an_empower_without_pips():
+    from wiz101_auto.farm import plan_round
+
+    assert plan_round([card("empower", castable=False), card("scarecrow")], []) == ("cast", 1)
+
+
+def test_round_plan_digs_for_scarecrow_but_keeps_treasure_cards_and_drains():
+    """10-10 19:53: Empower was cast, Scarecrow never drawn, and it passed 16 rounds."""
+    from wiz101_auto.farm import plan_round
+
+    hand = [card(), card("empower"), card(keep=True), card(drain=True), card()]
+    assert plan_round(hand, ["empower"]) == ("discard", [0, 1, 4])
+    assert plan_round(hand, []) == ("cast", 1)
+    waiting = [card("scarecrow", castable=False), card()]
+    assert plan_round(waiting, ["empower"]) == ("pass",)  # in hand, waiting for pips: no discard
+
+
+def test_round_plan_drains_when_hurt_unless_scarecrow_can_go():
+    from wiz101_auto.farm import plan_round
+
+    assert plan_round([card("empower")], [], heal=True) == ("drain",)
+    assert plan_round([card("scarecrow")], ["empower"], heal=True) == ("cast", 0)
+
+
+def test_empower_is_found_under_an_internal_name():
+    assert combo_spell("Spell_Empower") == "empower"
+    assert combo_spell("Empowerment") is None

@@ -1,12 +1,18 @@
-# Every option. Start from configs/chores.yaml. The day plan is PLAYBOOK.md.
-mode: chores                 # chores | pet | reagents | seeds
-log_file: wiz101-auto.log
+# Every option. The rules are PLAYBOOK.md.
+# On the Mac only `pet` and `seeds` run: the other modes travel by teleport,
+# and teleports closed the Wine client.
+mode: seeds                  # pet | seeds   (Windows also: chores | reagents)
+log_file: wiz101-auto.log    # each run also writes logs/runs/<time>-<mode>/
 
 pet:
   auto: true                 # chores dances while energy can pay, then farms
-  feed: true
+  feed: true                 # feed the first snack after each win
   default_goal: adult        # baby, teen, adult, ancient, epic, mega, ultra
   goals: {}                  # override default_goal for one pet kind
+
+seeds:
+  leash: 4500                # only creatures this close to where the run started (Boar Camp)
+  rest_minutes: 4            # stand still this long for health or mana, then fight anyway
 
 reagents:
   enabled: true              # follow a tracked collect quest; not an all-day sweep
@@ -17,3 +23,4 @@ safety:
   pause_key: ctrl+shift+p
   max_hours: 0
   mouseless: true
+  pause_releases_mouse: false  # true: a pause takes the mouse hook out (two more code writes each time)

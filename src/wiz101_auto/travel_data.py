@@ -336,9 +336,23 @@ def hop_count(current_zone: str, dest: str, gates: Gates) -> int | None:
 _cache: tuple[Gates, DisplayZones, Spots] | None = None
 
 
-def _traversal_dir() -> Path:
-    import wizwalker
+BOTTLE_TRAVERSAL = (
+    Path.home()
+    / "Library/Application Support/wiz101-chores/python/Lib/site-packages/wizwalker/extensions/wizsprinter"
+    / "traversalData"
+)
 
+
+def _traversal_dir() -> Path:
+    """WizSprinter's data: next to the installed wizwalker, else the bottle's copy (Mac tools)."""
+    import os
+
+    if os.environ.get("WIZ_TRAVERSAL"):
+        return Path(os.environ["WIZ_TRAVERSAL"])
+    try:
+        import wizwalker
+    except ImportError:
+        return BOTTLE_TRAVERSAL
     return Path(wizwalker.__file__).parent / "extensions" / "wizsprinter" / "traversalData"
 
 

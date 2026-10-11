@@ -12,13 +12,19 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 from pathlib import Path
+
+from loguru import logger
 
 HOOKS_FILE = Path("state") / "hooks.json"
 LOCK_FILE = Path("state") / "bot.lock"
 REHOOK_SETTLE = 0.5
 UNHOOK_TIMEOUT = 20.0
 MAX_SCAN_PAGE = 8 * 1024 * 1024
+MAX_SCAN_OVERLAP = 64 * 1024
+RELATIVE_JUMP_MAX = (1 << 31) - 1
+ALLOCATION_GRANULARITY = 64 * 1024
 # This text must not contain "Could not hook" or "Hooks did not activate".
 # The supervisor treats those as a reason to quit Wizard101.
 SCAN_STALL = (
@@ -90,7 +96,11 @@ def _add(found: dict[int, bytes], address, raw) -> None:
 def capture_regions(handler, client=None) -> list[tuple[int, bytes]]:
     """What a clean unhook would write back, taken from the live hook objects."""
     found: dict[int, bytes] = {}
-    _add(found, getattr(handler, "_autobot_address", None), getattr(handler, "_original_autobot_bytes", None))
+    allocation = getattr(handler, "_wine_autobot_allocation", None)
+    allocation_size = getattr(handler, "_wine_autobot_allocation_size", None)
+    autobot_address = getattr(handler, "_autobot_address", None)
+    if not address_in_range(autobot_address, allocation, allocation_size):
+        _add(found, autobot_address, getattr(handler, "_original_autobot_bytes", None))
     client = client if client is not None else getattr(handler, "client", None)
     jes = getattr(client, "_je_instruction_forward_backwards", None) if client is not None else None
     for hook in list(getattr(handler, "_active_hooks", {}).values()):
@@ -103,7 +113,9 @@ def capture_regions(handler, client=None) -> list[tuple[int, bytes]]:
         coll_bytes = getattr(hook, "_old_collision_jes_bytes", None) or ()
         for address, raw in zip(coll_addrs, coll_bytes, strict=False):
             _add(found, address, raw)
-        _add(found, getattr(hook, "_autobot_addr", None), getattr(hook, "_autobot_original_bytes", None))
+        hook_autobot = getattr(hook, "_autobot_addr", None)
+        if not address_in_range(hook_autobot, allocation, allocation_size):
+            _add(found, hook_autobot, getattr(hook, "_autobot_original_bytes", None))
         cursor = getattr(hook, "set_cursor_pos", None)
         if isinstance(cursor, tuple) and len(cursor) == 2:
             _add(found, cursor[0], cursor[1])
@@ -174,10 +186,21 @@ def keep_hook_record(*, running: bool) -> bool:
 
 
 def pid_alive(pid: int) -> bool:
+    """A live bot at that pid: a running python process.
+
+    Never os.kill(pid, 0) here. Inside the bottle Python is a Windows
+    program, and on Windows os.kill with any signal but Ctrl+C/Break calls
+    TerminateProcess: that would kill whatever process holds the pid now.
+    Wine reuses small pids, so a stale lock could name the game itself, and
+    a pid that is not a python process is not a bot.
+    """
     if not pid or int(pid) <= 0:
         return False
+    if sys.platform == "win32":
+        name = process_image(int(pid))
+        return bool(name) and "python" in name.lower()
     try:
-        os.kill(int(pid), 0)
+        os.kill(int(pid), 0)  # POSIX: signal 0 only checks
     except ProcessLookupError:
         return False
     except PermissionError:
@@ -185,6 +208,30 @@ def pid_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def process_image(pid: int) -> str:
+    """The exe path of a running Windows process, '' when it is gone (Windows only)."""
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    handle = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return ""
+    try:
+        code = wintypes.DWORD()
+        if not k32.GetExitCodeProcess(handle, ctypes.byref(code)) or code.value != 259:  # STILL_ACTIVE
+            return ""
+        size = wintypes.DWORD(1024)
+        buf = ctypes.create_unicode_buffer(1024)
+        if not k32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+            return "?"
+        return buf.value
+    finally:
+        k32.CloseHandle(handle)
 
 
 def claim_bot_lock(
@@ -236,6 +283,176 @@ def page_is_scannable(size: int) -> bool:
     except (TypeError, ValueError):
         return False
     return 0 < size <= MAX_SCAN_PAGE
+
+
+def address_in_range(address: int | None, base: int | None, size: int | None) -> bool:
+    if address is None or base is None or size is None:
+        return False
+    try:
+        address, base, size = int(address), int(base), int(size)
+    except (TypeError, ValueError):
+        return False
+    return base <= address < base + size
+
+
+def near_module_bounds(module_base: int, module_size: int) -> tuple[int, int]:
+    """Address bounds where rel32 jumps can reach every point in the module."""
+    base, size = int(module_base), int(module_size)
+    margin = ALLOCATION_GRANULARITY + 16
+    reach = RELATIVE_JUMP_MAX - margin
+    return max(0, base + size - reach), base + reach
+
+
+def _align_up(value: int, alignment: int) -> int:
+    return (value + alignment - 1) // alignment * alignment
+
+
+def _align_down(value: int, alignment: int) -> int:
+    return value // alignment * alignment
+
+
+def _allocate_near_module(handler, size: int) -> int:
+    """Reserve executable scratch space within rel32 reach of client code."""
+    import ctypes
+
+    import pymem.memory
+    import pymem.process
+    import pymem.ressources.kernel32
+    import pymem.ressources.structure
+
+    process_handle = handler.process.process_handle
+    free_memory = pymem.memory.free_memory
+    module = pymem.process.module_from_name(process_handle, "WizardGraphicalClient.exe")
+    if module is None:
+        raise OSError("could not find WizardGraphicalClient.exe to place hook memory")
+
+    module_base = int(module.lpBaseOfDll)
+    module_size = int(module.SizeOfImage)
+    low, high = near_module_bounds(module_base, module_size)
+    module_end = module_base + module_size
+    state = pymem.ressources.structure.MEMORY_STATE
+    protection = pymem.ressources.structure.MEMORY_PROTECTION
+    allocation_type = state.MEM_COMMIT.value | state.MEM_RESERVE.value
+    executable = protection.PAGE_EXECUTE_READWRITE.value
+    kernel32 = pymem.ressources.kernel32
+    virtual_alloc = kernel32.VirtualAllocEx
+    last_error = 0
+
+    def try_allocate(candidate: int) -> int:
+        nonlocal last_error
+        result = virtual_alloc(
+            process_handle,
+            ctypes.c_void_p(candidate),
+            size,
+            allocation_type,
+            executable,
+        )
+        if result:
+            address = int(result)
+            if low <= address and address + size <= high:
+                return address
+            free_memory(process_handle, address)
+        last_error = int(kernel32.GetLastError())
+        return 0
+
+    cursor = module_end
+    while cursor < high:
+        try:
+            info = pymem.memory.virtual_query(process_handle, cursor)
+        except Exception:
+            break
+        base = int(info.BaseAddress)
+        end = base + int(info.RegionSize)
+        if end <= cursor:
+            break
+        if info.state == state.MEM_FREE:
+            candidate = _align_up(max(base, cursor, low), ALLOCATION_GRANULARITY)
+            if candidate + size <= min(end, high):
+                address = try_allocate(candidate)
+                if address:
+                    return address
+        cursor = end
+
+    cursor = module_base - 1
+    while cursor >= low:
+        try:
+            info = pymem.memory.virtual_query(process_handle, cursor)
+        except Exception:
+            break
+        base = int(info.BaseAddress)
+        end = base + int(info.RegionSize)
+        if end <= base:
+            break
+        if info.state == state.MEM_FREE:
+            candidate = _align_down(min(cursor - size + 1, end - size), ALLOCATION_GRANULARITY)
+            if candidate >= max(base, low):
+                address = try_allocate(candidate)
+                if address:
+                    return address
+        cursor = base - 1
+
+    raise OSError(
+        f"could not allocate {size} bytes within rel32 range of Wizard101 "
+        f"module [{module_base:#x}, {module_end:#x}] "
+        f"(Windows error {last_error})"
+    )
+
+
+def install_wine_autobot_buffer(handler) -> int:
+    """Give WizWalker its scratch space in newly allocated writable game memory."""
+    if not os.environ.get("WINEPREFIX") or getattr(handler, "_wine_autobot_allocation", None):
+        return int(getattr(handler, "_wine_autobot_allocation", 0) or 0)
+
+    import pymem.memory
+
+    size = int(handler.AUTOBOT_SIZE)
+    address = _allocate_near_module(handler, size)
+    if not address:
+        raise OSError("Wine returned a null address for WizWalker hook memory")
+    address = int(address)
+
+    handler._autobot_address = address
+    handler._autobot_pos = 0
+    handler._original_autobot_bytes = b"\x00" * len(handler.AUTOBOT_PATTERN)
+    handler._wine_autobot_allocation = address
+    handler._wine_autobot_allocation_size = size
+
+    original_close = handler.close
+    free_memory = pymem.memory.free_memory
+
+    async def close():
+        await original_close()
+        allocation = getattr(handler, "_wine_autobot_allocation", None)
+        if allocation:
+            released = free_memory(handler.process.process_handle, allocation)
+            if not released:
+                raise OSError(f"Wine could not free WizWalker hook memory at {allocation:#x}")
+            handler._wine_autobot_allocation = None
+            logger.info("released WizWalker hook memory allocated in the game process")
+
+    handler.close = close
+    logger.info(f"Wine: allocated WizWalker hook scratch memory at {address:#x} ({size} bytes)")
+    return address
+
+
+def scan_ranges(base: int, size: int, overlap: int) -> list[tuple[int, int]]:
+    """Split a memory region into bounded reads without leaving gaps."""
+    try:
+        start = int(base)
+        end = start + int(size)
+        overlap = max(int(overlap), 0)
+    except (TypeError, ValueError):
+        return []
+    if end <= start:
+        return []
+    overlap = min(overlap, MAX_SCAN_OVERLAP, MAX_SCAN_PAGE - 1)
+    step = MAX_SCAN_PAGE - overlap
+    ranges = []
+    while start < end:
+        length = min(MAX_SCAN_PAGE, end - start)
+        ranges.append((start, length))
+        start += step
+    return ranges
 
 
 def forget_hooks(path: Path = HOOKS_FILE, pid: int | None = None) -> None:
@@ -373,17 +590,23 @@ def _scan_module(handle, module_name: str, pattern: bytes) -> list[int]:
         if (
             info.state == committed
             and info.protect in allowed
-            and page_is_scannable(size)
+            and size > 0
         ):
-            try:
-                data = pymem.memory.read_bytes(handle, page, size)
-            except Exception:
-                data = b""
-            if data:
-                for match in regex.finditer(pattern, data, regex.DOTALL):
-                    found.append(page + match.span()[0])
+            end = min(nxt, limit)
+            for chunk_start, chunk_size in scan_ranges(page, end - page, len(pattern)):
+                if not page_is_scannable(chunk_size):
+                    break
+                try:
+                    data = pymem.memory.read_bytes(handle, chunk_start, chunk_size)
+                except Exception:
+                    data = b""
+                if data:
+                    found.extend(
+                        chunk_start + match.span()[0]
+                        for match in regex.finditer(pattern, data, regex.DOTALL)
+                    )
         page = nxt
-    return found
+    return sorted(set(found))
 
 
 def install_scan_guard(handler) -> None:

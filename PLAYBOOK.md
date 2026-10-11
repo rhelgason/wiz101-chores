@@ -34,33 +34,45 @@ back to the pavilion, and one farm to the other. The dorm is left on foot.
 A house door opens onto any world. A zone with no gate path goes Home once,
 then takes that same door.
 
-`mode: pet` only dances. `mode: reagents` only gathers the reagent that was
-asked for. `mode: seeds` does not dance. It fights Troubled Warriors and
-Splithoof Barbarians in Savarstaad Pass until it is stopped. Each round
-casts Empower, then Scarecrow, and passes while the next of those is not
-ready. Deathblade is not used. A death drain is used only when health is
-low and that next card cannot be cast. If neither creature is loaded where the
-wizard is standing, it goes back to where one was last seen, then through
-the Savarstaad compass spots. Those jumps wait until the zone is free and
-skip the Northguard gate, which was loading the wizard out of the pass.
-It walks onto the creature. A fight is played when the battle window is
-up, even when the duel phase still says it has not started. The loop does
-not sit through the card timer. After the wizard stands on a creature, no
-teleport runs for a short while: that jump, while the duel was still
-joining, closed the game. Across the zone, one teleport lands a short
-walk away and that same walk finishes it. A creature that does not fight
-is skipped in place, and the next pull walks to another. Movement keys are
-posted. This Wine build drops the other key path, so a walk that only turns
-is that path. The log names each teleport and each walk before it runs. Mana under about a third walks to
-Northguard, takes a mana wisp, and comes back. A bag with two slots left
-goes to Elik at the Wizard City Bazaar, presses X, and opens Backpack Buddy.
-It sells only names that were not in the bag when the run started. Couch
-potato seeds stay. A name shared with an older item, and anything equipped,
-is not clicked. `chores` is the list above. Deaths, low health, a missed zone,
+`mode: pet` and `mode: seeds` are the only modes that run on the Mac. The
+others travel by teleport (see "Why the Mac client crashed" below).
+
+Both start from anywhere. Travel is on foot: gate to gate inside a world,
+and the world door (walked to, its prompt clicked, the Spiral Map picked)
+between worlds. Inside each zone the wizard follows the game's own walking
+graph (each zone's `zone.nav`), so it goes around buildings and fences
+instead of into them. A creature that pulls the wizard into a duel on the
+way is fought, then the trip goes on. A trip that fails is tried again in
+two minutes, with a Mac notification.
+
+`mode: pet` walks to the Pet Pavilion, then onto the dance sigil. It plays
+while the globe can pay, feeds the first snack after each win, and when the
+globe cannot pay it checks again every five minutes. A duel on screen is
+waited out, not fought.
+
+`mode: seeds` fights Troubled Warriors and Splithoof Barbarians in Savarstaad
+Pass until it is stopped, by walking only. It walks to the pass, then to
+Boar Camp, which is home (started in the pass near the camp, where the
+wizard stands is home), and only creatures within `seeds.leash` (4500) of home
+are pulled. A pull holds W toward the creature, re-aiming as it wanders,
+and the duel is waited for up to 14 seconds after contact. A creature that
+does not fight is skipped for 30 seconds. With nothing in reach the wizard
+walks back to home and waits for respawns; if that walk sticks three times,
+home moves to where the wizard is. Each round casts Empower, then Scarecrow,
+and passes while the next of those is not ready. Deathblade is not used. A
+death drain is used only when health is low and that next card cannot be
+cast. Low health or mana out of a fight: a potion if one is charged, a wisp
+within reach, else it stands still for up to `seeds.rest_minutes` and logs
+whether the globe refilled. A backpack two slots from full stops the run, so
+a dropped couch potato seed is not lost. Out of the pass (a defeat, a stray
+gate) it walks back.
+
+What `mode: seeds` does not do: rest in Northguard or sell at the Bazaar.
+
+`mode: reagents` (Windows) only gathers the reagent that was asked for.
+`chores` (Windows) is the list above. Deaths, low health, a missed zone,
 and an empty snack pile do not stop the session. Stop is the menu bar, or
-`state/stop.request`. Stopping the bot leaves Wizard101 open. The next run
-hooks that same window, including when the last run was killed. Quit the
-game only when its window is already gone.
+`state/stop.request`.
 
 Health under about 60% in a fight casts a death drain on an enemy: Ghoul,
 Wraith, Vampire, Skeletal Dragon, or any other card that steals health.
@@ -231,16 +243,19 @@ seed adds one when a stack does not show up as its own slot.
 
 ## Stopping
 
-The bot has to unhook before the game is played. Closing its window leaves
-the hook in, and the next start fails until Wizard101 is restarted.
+On this Mac the stop is the menu bar item **Wiz on**, `Stop Wizard Bot.command`,
+Ctrl+C in the `mac/run.sh` terminal, or `python -m wiz101_auto stop`. Each one
+asks for a clean stop. Ctrl+Shift+Q works while the bot is a Windows process
+inside the bottle.
 
-On this Mac the stop is the menu bar item **Wiz on**. Choose **Stop and
-unhook**. The same thing is `Stop Wizard Bot.command` in the repo, or
-`python -m wiz101_auto stop` from the repo directory. Ctrl+Shift+Q is the
-stop key while the bot is a Windows process inside the bottle. The menu bar
-also sends it, once macOS Accessibility is allowed for that item.
+A clean stop takes the mouse hook out (the mouse is the player's again) and
+leaves the other hooks in the game. `state/hook_session.json` records every
+byte they wrote. The next start, in the same game window, compares those
+bytes and reuses the hooks without writing any code. A new game window gets
+new hooks. If the bytes in the game do not match the record, the bot refuses
+to start and says to restart Wizard101; it does not try to repair them.
 
-A stop is a clean stop. The supervisor does not start it again.
+A clean stop is a clean stop. Nothing starts it again.
 
 ## This Mac
 
@@ -262,3 +277,57 @@ and the process aborts. The dialog can name Wizard101; the crashing process
 is python.exe, and closing the dialog leaves the game running.
 `mac/sitecustomize.py` is placed next to that Python so the copy is a normal
 read and write. `mac/run.sh` refreshes that file on each start.
+
+
+## Why the Mac client crashed
+
+The evidence, from the 2026-10-06 and 10-07 sessions:
+
+- Every client death with a known step came right after a teleport: mob
+  pulls (15:42, 15:55), a camp jump (19:04), an unstick (23:34), the spiral
+  door trip (23:16), and the pet run's sigil jump between games (11:19).
+- WizWalker's teleport is not a position write. Each one writes six NOPs
+  over two jumps in the game's movement code, from outside the process,
+  while the game runs that code every frame. Its hook code then writes the
+  original bytes back from inside the game, and if that has not happened in
+  0.6s, Python writes them back from outside. The same hook also turns off
+  two collision checks for the whole session.
+- The game is x86 code run by Rosetta 2 inside Wine on Apple silicon.
+  Rosetta translates code once and runs the translation. Code changed by
+  another process while it runs is the case that translation handles worst.
+- The only minidump left (10:55 on 10-07) is an execute fault at
+  `WizardGraphicalClient.exe+0x179f150`, the first byte of WizWalker's hook
+  cave, with the player hook's own bytes at that address. A same-process
+  rehook had made that page non-executable while the old hooks still
+  jumped into it. The game itself was not at fault.
+- Rehooking an already-hooked game then failed every time with WinAPI error
+  317 writing that cave.
+
+So the bot writes game code only while its hooks go in or come out, and
+the write guard (`blackbox.py`) refuses any other code write. Nothing
+teleports on the Mac. Hooks stay in between runs, so a restart of the bot
+writes no code at all. The mouse hook is the one that comes and goes, so
+the player gets the mouse back.
+
+## When it crashes anyway
+
+`mac/run.sh` gives each run a folder, `logs/runs/<time>-<mode>/`:
+
+- `bot.log`: everything the bot logged, DEBUG and up, with WizWalker's own lines.
+- `events.jsonl`: one line per hook write, code write, blocked write, walk,
+  click, cast, fight, and a heartbeat every 10s (zone, position, health,
+  mana, duel). Each line is on disk before the next action.
+- `hook_session.json` and `code_writes.json`: every address the bot wrote.
+- `console.log`: the Wine console, including Wine's own errors.
+- `run.json`: versions, the game process, where the game log stood at start.
+
+`mac/crashwatch.py` runs beside the bot. When the game process exits, Wine's
+crash handler starts, or the game writes a minidump, it copies the game's
+`WizardClient.log` from the run's start, the minidump, and any macOS crash
+reports into the folder, and writes `CRASH.md`: the dump's verdict (bot hook,
+Wine graphics, or the game), the last 40 bot events, how long before the
+death the last code write was, and the game log's error lines. The game
+overwrites its one minidump on every crash and rewrites its log on every
+launch, so this has to happen at once. Old dumps are kept in `logs/dumps/`.
+
+`python3 mac/crashwatch.py dump <file.dmp>` reads any minidump by hand.

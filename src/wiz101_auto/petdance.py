@@ -1,9 +1,10 @@
-"""Pet dance game grinding (the `pet` command).
+"""Pet dance game grinding (`mode: pet`, and the `pet` request on Windows).
 
-`pet [--games N]` asks the running bot to go to the Pet Pavilion in Wizard
-City at its next free moment, play the dance game on the Wizard City track
-until the pet is out of energy (or N games), feed the first snack offered
-after each win, then walk back to the zone it left.
+`mode: pet` walks to the Pet Pavilion from wherever the wizard is (on foot,
+navigate.py), walks onto the dance sigil, plays the dance game on the
+Wizard City track while the energy globe can pay, feeds the first snack
+offered after each win, and waits for energy in between. Nothing is
+teleported to: on the Mac, teleports closed the client.
 
 The dance moves come straight from memory: a hook on the code that reads
 the pet's dance sequence (from Deimos, github.com/Deimos-Wizard101,
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import math
 import re
 import time
 from pathlib import Path
@@ -31,14 +33,17 @@ except ImportError:  # the dance hook only exists on Windows, next to the game
     class SimpleHook:  # type: ignore[no-redef]
         pass
 
-from . import ui
+from . import blackbox, ui
 from .dayplan import DANCE_COST
 from .world import is_free, wait_for_loading
 
 PET_REQUEST = Path("state") / "pet.request"  # `pet`: games to play ("0": until the energy runs out)
 PET_PARK = "WizardCity/WC_Streets/Interiors/WC_PET_Park"
 GAME_IDLE_SECONDS = 180.0  # a dance game and its rewards: no watchdog recovery meanwhile
-DANCE_SIGIL = XYZ(-4450.58, -994.90, -8.04) if XYZ else None  # the dance game's sigil in the Pet Pavilion
+SIGIL = (-4450.58, -994.90, -8.04)  # the dance game's sigil in the Pet Pavilion
+DANCE_SIGIL = XYZ(*SIGIL) if XYZ else None
+ENERGY_WAIT = 300.0  # seconds between energy checks while the globe cannot pay
+TRAVEL_RETRY = 120.0  # a walk to the pavilion that failed is tried again after this
 DANCE_TITLE = "Dance Game"  # the sigil's prompt title
 NPC_TITLE = ["WorldView", "NPCRangeWin", "wndTitleBackground", "NPCRangeTxtTitle"]
 MOVES = str.maketrans("abcd", "WDSA")
@@ -74,11 +79,6 @@ async def activate_dance_hook(handler: HookHandler):
     await hook.hook()
     handler._active_hooks[DanceGameMovesHook] = hook
     handler._base_addrs["dance_game_moves"] = hook.dance_game_moves
-    client = getattr(handler, "client", None)
-    if client is not None:
-        from .rehook import remember_installed_hooks
-
-        remember_installed_hooks(client)
 
 
 async def deactivate_dance_hook(handler: HookHandler):
@@ -458,11 +458,20 @@ class PetDancer:
             logger.info("pet: going to the Pet Pavilion for the dance game")
             if not await self._go_to_pavilion():
                 logger.warning("pet: could not reach the Pet Pavilion")
-                return
+                return 0, "could not reach the Pet Pavilion"
         games, why = 0, "done"
         snack_logged = False
-        await activate_dance_hook(self.client.hook_handler)
-        await asyncio.sleep(HOOK_SETTLE)
+        handler = self.client.hook_handler
+        own_hook = getattr(self.client, "_bot_hooks", None) is None
+        if own_hook:
+            await activate_dance_hook(handler)
+            await asyncio.sleep(HOOK_SETTLE)
+        elif not handler._base_addrs.get("dance_game_moves"):
+            logger.error("pet: the dance hook is not in; restart the bot in pet mode")
+            return 0, "no dance hook"
+        elif "dance" in self.client._bot_hooks.installed and not getattr(self, "_settled", False):
+            await asyncio.sleep(HOOK_SETTLE)  # written this run: let it see a turn first
+            self._settled = True
         try:
             limit = wanted or MAX_GAMES
             while games < limit:
@@ -503,16 +512,19 @@ class PetDancer:
                 await self._close_all()
             except Exception as exc:
                 logger.warning(f"pet: could not close the dance windows ({exc})")
-            try:
-                await deactivate_dance_hook(self.client.hook_handler)
-            except Exception as exc:
-                logger.warning(f"pet: could not lift the dance hook ({exc})")
+            if own_hook:
+                try:
+                    await deactivate_dance_hook(handler)
+                except Exception as exc:
+                    logger.warning(f"pet: could not lift the dance hook ({exc})")
         logger.info(f"pet: {games} game(s) played; stopped: {why}")
+        blackbox.event("dance_trip", games=games, why=why)
         if not resumed and start and start != PET_PARK and await is_free(self.client):
             from .travel import go_to_zone
 
             if not await go_to_zone(self.client, start):
                 logger.info(f"pet: no gate path back to {start}; staying here")
+        return games, why
 
     async def _go_to_pavilion(self) -> bool:
         from .travel import go_to_zone
@@ -523,19 +535,38 @@ class PetDancer:
         await wait_for_loading(self.client)
         return await self.client.zone_name() == PET_PARK
 
+    async def _prompt_up(self) -> bool:
+        return await ui.text_at(self.client, NPC_TITLE) == DANCE_TITLE
+
     async def _on_sigil(self) -> bool:
-        """Stand on the sigil until its prompt shows."""
-        for _ in range(4):
-            if await ui.text_at(self.client, NPC_TITLE) == DANCE_TITLE:
+        """Stand on the sigil until its prompt shows. Walked to, never teleported to."""
+        from .walk import position, walk_point
+
+        for attempt in range(4):
+            if await _wait_for(self._prompt_up, 3.0):
                 return True
-            await self.client.teleport(DANCE_SIGIL)
-            await asyncio.sleep(1.0)
-            if await ui.text_at(self.client, NPC_TITLE) == DANCE_TITLE:
-                return True
-            await self.client.send_key(Keycode.S, 0.2)
-            await self.client.send_key(Keycode.W, 0.3)
-            await asyncio.sleep(0.6)
-        return False
+            me = await position(self.client)
+            away = math.dist(me[:2], SIGIL[:2])
+            if away > 600.0:
+                # Across the pavilion: the game's own paths, around the fences.
+                from .navigate import walk_in_zone
+
+                await walk_in_zone(self.client, SIGIL, why="to the dance sigil", controller=self.controller,
+                                   on_fight=getattr(self.client, "_on_fight", None), reach=60.0)
+                continue
+            if away > 60.0:
+                checkpoint = self.controller.checkpoint if self.controller else None
+                await walk_point(
+                    self.client, SIGIL, why="dance sigil", stop_within=25.0,
+                    max_seconds=min(25.0, 3.0 + away / 300.0), checkpoint=checkpoint,
+                )
+            else:
+                # On it, but no prompt: step off and back on.
+                logger.info(f"pet: on the sigil without its prompt (try {attempt + 1}); stepping off and on")
+                await self.client.send_key(Keycode.S, 0.35)
+                await self.client.send_key(Keycode.W, 0.4)
+            await asyncio.sleep(0.8)
+        return await self._prompt_up()
 
     async def _cannot_pay(self) -> bool:
         """True when the last dance window priced a game the globe cannot buy.
@@ -696,3 +727,109 @@ class PetDancer:
             else:
                 return
             await asyncio.sleep(0.4)
+
+
+async def wait_for_energy(dancer: PetDancer, controller, task: dict) -> None:
+    """The globe cannot pay: check again every ENERGY_WAIT seconds."""
+    now, most = await dancer.energy()
+    cost = load_pet().get("dance_cost")
+    task["name"] = "waiting for pet energy"
+    logger.info(
+        f"pet: energy {now if now is not None else '?'}/{most or '?'}; a game costs {cost or '?'}. "
+        f"Checking again in {ENERGY_WAIT / 60:.0f} min"
+    )
+    blackbox.event("energy_wait", energy=now, max=most, cost=cost)
+    if controller:
+        controller.allow_idle(ENERGY_WAIT + 60)
+    try:
+        end = time.monotonic() + ENERGY_WAIT
+        while time.monotonic() < end:
+            if controller:
+                await controller.checkpoint()
+            await asyncio.sleep(5.0)
+    finally:
+        if controller:
+            controller.end_idle()
+
+
+async def pet_loop(client, cfg, controller, task: dict) -> None:
+    """`mode: pet`: dance while the globe can pay, wait for energy, repeat until stopped."""
+    from wizwalker.errors import ClientClosedError
+
+    from .bot import game_gone
+    from .farm import in_fight
+    from .safety import BotStopped
+
+    dancer = PetDancer(client, cfg, controller)
+    said = ""
+    closed = failures = total = 0
+    next_trip = 0.0
+
+    def say(key: str, text: str) -> None:
+        nonlocal said
+        if said != key:
+            logger.info(text)
+            said = key
+
+    logger.info("pet: dance games in the Pet Pavilion (walking there first if the wizard is elsewhere)")
+    while not controller.stopped.is_set():
+        await controller.checkpoint()
+        try:
+            if await in_fight(client):
+                task["name"] = "waiting for the duel to end"
+                say("duel", "pet: a duel is on; waiting for it to end (pet mode does not fight)")
+                await asyncio.sleep(1.0)
+                continue
+            if not await is_free(client):
+                task["name"] = "waiting (dialogue or loading)"
+                await asyncio.sleep(0.5)
+                continue
+            zone = await client.zone_name() or ""
+            if zone != PET_PARK and not in_pet_game(zone):
+                if time.monotonic() >= next_trip:
+                    task["name"] = "walking to the Pet Pavilion"
+                    from .travel import go_to_zone
+
+                    if await go_to_zone(client, PET_PARK):
+                        continue
+                    next_trip = time.monotonic() + TRAVEL_RETRY
+                    blackbox.event("needs_player", why="could not walk to the Pet Pavilion", zone=zone)
+                    say(
+                        f"away:{zone}",
+                        f"pet: could not walk from {zone or 'here'} to the Pet Pavilion; trying again in "
+                        f"{TRAVEL_RETRY / 60:.0f} min (or walk it there and pet mode carries on).",
+                    )
+                task["name"] = "waiting to retry the walk to the Pet Pavilion"
+                await asyncio.sleep(5.0)
+                continue
+            said = ""
+            if not in_pet_game(zone) and await dancer._cannot_pay():
+                await wait_for_energy(dancer, controller, task)
+                continue
+            task["name"] = "dance"
+            games, why = await dancer.trip(0, past_goal=True, keep_on_miss=True)
+            total += games
+            closed = 0
+            if why in ("no energy", "holding energy"):
+                failures = 0
+                continue
+            if games == 0 and why not in ("done",):
+                failures += 1
+                pause = min(120.0, 15.0 * failures)
+                logger.info(f"pet: no game this time ({why}); trying again in {pause:.0f}s")
+                await asyncio.sleep(pause)
+            else:
+                failures = 0
+        except BotStopped:
+            break
+        except ClientClosedError:
+            closed += 1
+            if game_gone(controller, closed):
+                break
+            await asyncio.sleep(2.0)
+        except Exception as exc:
+            closed = 0
+            logger.opt(exception=exc).error(f"pet: step failed: {type(exc).__name__}: {exc}")
+            blackbox.event("step_error", error=f"{type(exc).__name__}: {exc}")
+            await asyncio.sleep(3.0)
+    logger.info(f"pet: {total} game(s) this run")

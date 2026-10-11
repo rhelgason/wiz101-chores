@@ -17,6 +17,9 @@ class SafetyConfig:
     pause_key: str = "ctrl+shift+p"
     max_hours: float = 0.0  # 0 = no limit: run until stopped
     mouseless: bool = True  # clicks through a memory hook so the real mouse stays free
+    # Paused, take the mouse hook out so the player can click. Each pause is
+    # then two more writes to game code; off, a pause only holds the bot.
+    pause_releases_mouse: bool = False
 
 
 @dataclass
@@ -42,12 +45,24 @@ class ReagentConfig:
 
 
 @dataclass
+class SeedsConfig:
+    """`mode: seeds`. Home is where the wizard stands when the run starts (Boar
+    Camp). Only creatures within `leash` of home are pulled."""
+
+    leash: float = 4500.0
+    rest_minutes: float = 4.0  # stand still this long for health or mana before fighting anyway
+    northguard_trips: bool = True  # low and nothing nearby: Mark, walk to Northguard for wisps, Recall
+    sell: bool = True  # bag nearly full: Mark, walk to the Bazaar, sell this run's loot, Recall
+
+
+@dataclass
 class Config:
     mode: str = "chores"  # the day plan | pet only | a reagent sweep | Savarstaad seeds
     log_file: str = "wiz101-auto.log"
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     pet: PetConfig = field(default_factory=PetConfig)
     reagents: ReagentConfig = field(default_factory=ReagentConfig)
+    seeds: SeedsConfig = field(default_factory=SeedsConfig)
 
 
 def _merge(obj: Any, data: dict[str, Any], path: str = "") -> Any:
@@ -85,4 +100,6 @@ def load_config(path: str | Path | None) -> Config:
         raise ValueError(f"mode must be one of {', '.join(MODES)}, not {cfg.mode!r}")
     if cfg.reagents.hop_zones < 0:
         raise ValueError("reagents.hop_zones must be 0 or more")
+    if cfg.seeds.leash < 500:
+        raise ValueError("seeds.leash must be at least 500")
     return cfg

@@ -11,3 +11,4 @@ dist/
 state/
 mac/WizStop
 venv/
+logs/
