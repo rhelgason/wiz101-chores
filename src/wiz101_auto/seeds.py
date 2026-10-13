@@ -10,10 +10,15 @@ be cast), and looks again. With nothing in reach it walks back toward home
 and waits for the camp to respawn.
 
 Nothing teleports: on the Mac, teleports closed the client. Out of the pass
-(a defeat, a stray gate) it walks back. It does not rest in Northguard or
-sell at the Bazaar. Low health or mana: a potion
-if one is charged, a wisp within reach, else it stands still for a while. A
-backpack two slots from full stops the run, so a dropped seed is not lost.
+(a defeat, a stray gate) it walks back. Low health or mana: a potion if
+one is charged, a wisp within reach, else Mark, a walk to Northguard's
+wisps, and Recall (or it stands still for a while). A fight is fled when
+the wizard runs dry of mana or is about to lose (farm.flee_reason); that
+need, or a defeat (waking in Northguard), is then refilled before the next
+pull, and an unread globe counts as empty until the full rest is stood. A
+backpack two slots from full is quick sold in place (selling.quick_sell:
+only this run's loot, never couch potatoes); if that cannot make room the
+run stops, so a dropped seed is not lost.
 """
 
 from __future__ import annotations
@@ -35,11 +40,13 @@ HEALTH_LOW = 0.40  # out of a fight; in a fight the death drain covers 60%
 HEALTH_READY = 0.65
 BAG_FREE = 2
 BAG_EVERY = 60.0  # seconds between backpack reads
+SEED_COUNT_EVERY = 5  # fights between couch potato counts (a read of the whole bag)
 FIGHT_WAIT = 14.0  # the duel showed up about 11s after contact (23:34 session)
 SKIP_AFTER_MISS = 30.0
 WISP_REACH = 2500.0
 HOME_SLACK = 700.0  # nearer than this to home counts as home
 REST_COOLDOWN = 600.0  # a rest that did not help is not repeated for this long
+WISP_RETRY = 20.0  # a wisp walked onto is not walked to again for this long (it may have respawned)
 SPAWN_WAIT = 3.0
 PULL_REACH = 15.0  # walk into the creature, not up to it: contact starts the duel
 CONTACT = 150.0  # a walk that ended farther than this from it cannot have started a duel
@@ -47,6 +54,8 @@ AFTER_FIGHT = 0.6
 BOAR_CAMP = (-23200.0, 14300.0, 502.0)  # Splithoof Barbarians; on the zone's walking graph
 CAMP_NEAR = 6000.0  # a start this close to the camp keeps the wizard's own spot as home
 TRAVEL_RETRY = 120.0
+STUCK_BUSY = 300.0  # a loading screen or dialogue this long: tell the player (10-12: 2 h on one)
+DEFEAT_WINDOW = 90.0  # in Northguard this soon after a fight: it was lost
 
 
 def in_savarstaad(zone: str | None) -> bool:
@@ -70,6 +79,13 @@ def health_is_ready(ratio: float | None) -> bool:
     return ratio is None or ratio >= HEALTH_READY
 
 
+def is_full(ratio: float | None, full: float, strict: bool = False) -> bool:
+    """A Northguard fill is done. Unread counts as full, unless the duel proved it empty."""
+    if ratio is None:
+        return not strict
+    return ratio >= full
+
+
 def bag_is_full(used: int | None, capacity: int | None) -> bool:
     """True when only a couple of slots remain. Unread space is not full."""
     if used is None or capacity is None or capacity <= 0:
@@ -86,8 +102,33 @@ def low_on(health: float | None, mana: float | None) -> str:
     return ""
 
 
-def recovered(what: str, health: float | None, mana: float | None) -> bool:
+def recovered(what: str, health: float | None, mana: float | None, strict: bool = False) -> bool:
+    """`strict` (a need the duel proved): an unread globe is not back."""
+    ratio = health if what == "health" else mana
+    if strict and ratio is None:
+        return False
     return health_is_ready(health) if what == "health" else mana_is_ready(mana)
+
+
+def hud_ratio(text: str, top: int | None) -> float | None:
+    """A HUD globe's text ("2744", or "2744/2744") over its maximum. None if unreadable."""
+    import re
+
+    numbers = [int(n) for n in re.findall(r"\d+", (text or "").replace(",", ""))]
+    if not numbers:
+        return None
+    if len(numbers) >= 2 and numbers[1] > 0:
+        return min(numbers[0] / numbers[1], 1.0)
+    if not top or top <= 0:
+        return None
+    return min(numbers[0] / top, 1.0)
+
+
+def stats_contradict(fled: str, health: float | None, mana: float | None) -> bool:
+    """client.stats says the globe the duel just ran out of is fine: it is misread."""
+    ratio = mana if fled == "mana" else health if fled == "health" else None
+    ready = mana_is_ready if fled == "mana" else health_is_ready
+    return ratio is not None and ready(ratio)
 
 
 @dataclass(frozen=True)
@@ -143,6 +184,12 @@ class SeedFarm:
         self.home_fails = 0
         self.next_trip = 0.0
         self.topped_up = False
+        self.owed: list[str] = []  # needs a duel proved (fled, or defeated): refilled before the next pull
+        self.trust_stats = True
+        self.last_fight_end = 0.0
+        self.last_fled = ""  # fleeing a Savarstaad duel lands in Northguard too: not a defeat
+        self.busy_since = 0.0
+        self.busy_told = False
         from .selling import LootBook
 
         self.book = LootBook()
@@ -153,6 +200,26 @@ class SeedFarm:
             self.said = key
 
     async def ratios(self) -> tuple[float | None, float | None]:
+        """Health and mana, 0..1: client.stats, else the HUD globes' numbers
+        over the maxima last read in a duel (client.stats read nothing on 10-11)."""
+        health, mana = await self.stat_ratios() if self.trust_stats else (None, None)
+        if health is None or mana is None:
+            hud_health, hud_mana = await self.hud_ratios()
+            health = hud_health if health is None else health
+            mana = hud_mana if mana is None else mana
+        return health, mana
+
+    async def hud_ratios(self) -> tuple[float | None, float | None]:
+        from . import ui
+        from .farm import last_vitals
+
+        out = []
+        for name, top in (("textHealth", "max_health"), ("textMana", "max_mana")):
+            text = ui._TAGS.sub("", await ui.named_text(self.client, name))
+            out.append(hud_ratio(text, last_vitals.get(top)))
+        return out[0], out[1]
+
+    async def stat_ratios(self) -> tuple[float | None, float | None]:
         stats = self.client.stats
         health = mana = None
         try:
@@ -184,10 +251,23 @@ class SeedFarm:
         if not await is_free(client):
             self.task["name"] = "waiting (dialogue or loading)"
             self.say_once("busy", "seeds: in a dialogue or a loading screen; waiting")
+            await self.note_busy()
             await asyncio.sleep(0.5)
             return
+        self.busy_since, self.busy_told = 0.0, False
         zone = await client.zone_name() or ""
         if not in_savarstaad(zone):
+            if (
+                zone == NORTHGUARD
+                and not self.last_fled
+                and time.monotonic() - self.last_fight_end < DEFEAT_WINDOW
+            ):
+                self.defeated()
+            if zone == NORTHGUARD and self.owed:
+                # Already where the refill trip goes.
+                while self.owed:
+                    await self.gather(self.owed.pop(0), strict=True)
+                return
             await self.travel(zone)
             return
         me = await self.where()
@@ -195,6 +275,9 @@ class SeedFarm:
             await self.settle(me)
             return
         if await self.bag_full():
+            return
+        if self.owed:
+            await self.recover(self.owed.pop(0), strict=True)
             return
         health, mana = await self.ratios()
         if not self.topped_up:
@@ -213,6 +296,29 @@ class SeedFarm:
             await self.recover(need)
             return
         await self.hunt(me)
+
+    async def note_busy(self) -> None:
+        """A loading screen that never ends (10-12 10:19: the flee's, for two hours,
+        until the player restarted the game) gets a warning and a Mac notification."""
+        now = time.monotonic()
+        if not self.busy_since:
+            self.busy_since = now
+        if self.busy_told or now - self.busy_since < STUCK_BUSY:
+            return
+        self.busy_told = True
+        try:
+            loading = bool(await self.client.is_loading())
+        except Exception as exc:
+            _reraise_closed(exc)
+            loading = None
+        what = "a loading screen" if loading else "a dialogue or loading screen"
+        minutes = (now - self.busy_since) / 60.0
+        logger.warning(
+            f"seeds: stuck on {what} for {minutes:.0f} min; the game may have lost its connection. "
+            "Still waiting; restart the game if it does not clear."
+        )
+        zone = await self.client.zone_name()
+        blackbox.event("needs_player", why=f"stuck on {what} for {minutes:.0f} min", zone=zone)
 
     async def travel(self, zone: str) -> None:
         """Walk to Savarstaad Pass from wherever the wizard is; retry later if that fails."""
@@ -413,25 +519,67 @@ class SeedFarm:
         self.task["name"] = "fight"
         started = time.monotonic()
         blackbox.event("fight_start")
-        await play_current_fight(self.client, self.controller)
+        fled = await play_current_fight(self.client, self.controller)
         self.fights += 1
-        seeds = await self.count_seeds()
+        self.last_fight_end = time.monotonic()
+        self.last_fled = fled or ""
+        if fled:
+            await self.owe(fled, f"fled fight {self.fights}, out of {fled}")
+        seeds = await self.count_seeds() if self.fights % SEED_COUNT_EVERY == 0 else None
         gained = (
             ""
             if seeds is None or self.seeds_at_start is None
             else f"; couch potato seeds {seeds} (+{seeds - self.seeds_at_start} this run)"
         )
-        logger.info(f"seeds: fight {self.fights} over in {time.monotonic() - started:.0f}s{gained}")
-        blackbox.event("fight_end", n=self.fights, seconds=round(time.monotonic() - started), seeds=seeds)
+        health, mana = await self.ratios()
+        logger.info(
+            f"seeds: fight {self.fights} over in {time.monotonic() - started:.0f}s{gained} "
+            f"(stats: health {_pct(health)}, mana {_pct(mana)})"
+        )
+        blackbox.event(
+            "fight_end",
+            n=self.fights,
+            seconds=round(time.monotonic() - started),
+            seeds=seeds,
+            fled=fled,
+            health=health,
+            mana=mana,
+        )
         await asyncio.sleep(AFTER_FIGHT)
 
-    async def count_seeds(self) -> int | None:
-        from .garden import garden_state
+    async def owe(self, need: str, why: str) -> None:
+        """Refill `need` before the next pull. If client.stats calls it full, stop trusting it."""
+        if need not in self.owed:
+            self.owed.append(need)
+        health, mana = await self.ratios()
+        logger.warning(
+            f"seeds: {why}; refilling {need} before the next pull "
+            f"(stats say health {_pct(health)}, mana {_pct(mana)})"
+        )
+        blackbox.event("owed", need=need, why=why, health=health, mana=mana)
+        if self.trust_stats and stats_contradict(need, health, mana):
+            self.trust_stats = False
+            logger.warning(
+                f"seeds: the game's stats say {need} is fine right after the duel ran out of it; "
+                "not trusting them this run (every rest now runs its full length)"
+            )
+            blackbox.event("stats_untrusted", need=need, health=health, mana=mana)
 
-        try:
-            return int(garden_state().get("couch_potatoes") or 0)
-        except Exception:
-            return None
+    def defeated(self) -> None:
+        self.last_fight_end = 0.0
+        logger.warning(f"seeds: defeated (woke in Northguard after fight {self.fights}); refilling first")
+        blackbox.event("defeat", fight=self.fights)
+        self.controller.record_death(NORTHGUARD)
+        for need in ("health", "mana"):
+            if need not in self.owed:
+                self.owed.append(need)
+
+    async def count_seeds(self) -> int | None:
+        """Couch potatoes in the bag, read from the bag itself (the drops hook is not in)."""
+        from .garden import _item_stacks, count_potatoes
+
+        stacks = await _item_stacks(self.client)
+        return None if stacks is None else count_potatoes(stacks)
 
     async def bag_full(self) -> bool:
         if time.monotonic() < self.next_bag:
@@ -445,15 +593,15 @@ class SeedFarm:
         if not bag_is_full(int(used), int(capacity)):
             return False
         if self.cfg.sell and self.book.selling:
-            from .selling import sell_trip
+            from .selling import quick_sell
 
-            self.task["name"] = "selling at the Bazaar"
-            logger.info(
-                f"seeds: the backpack is at {used}/{capacity}; marking the camp and walking to the Bazaar"
-            )
-            if await sell_trip(self.client, self.controller, self.book, SAVARSTAAD):
+            self.task["name"] = "quick selling"
+            logger.info(f"seeds: the backpack is at {used}/{capacity}; quick selling this run's loot")
+            if await quick_sell(self.client, self.controller, self.book):
                 logger.info("seeds: sold; back to the boars")
                 return False
+            if await self._fight_now():
+                return False  # a mob walked in; the fight comes first, then selling again
             logger.warning("seeds: selling did not make room")
         logger.warning(
             f"seeds: the backpack is at {used}/{capacity}. Stopping so no couch potato seed is lost. "
@@ -464,25 +612,27 @@ class SeedFarm:
         self.controller.stop("the backpack is full")
         return True
 
-    async def recover(self, need: str) -> None:
+    async def recover(self, need: str, strict: bool = False) -> None:
         """A potion, a wisp in reach, or standing still, until `need` is back."""
         self.task["name"] = f"recovering {need}"
         health, mana = await self.ratios()
         logger.info(f"seeds: {need} is low (health {_pct(health)}, mana {_pct(mana)})")
         blackbox.event("recover", need=need, health=health, mana=mana)
         if await self.potion():
+            if strict and not self.trust_stats:
+                return  # a potion fills both globes
             health, mana = await self.ratios()
-            if recovered(need, health, mana):
+            if recovered(need, health, mana, strict):
                 return
         if await self.wisp(need):
             health, mana = await self.ratios()
-            if recovered(need, health, mana):
+            if recovered(need, health, mana, strict):
                 return
-        if self.cfg.northguard_trips and await self.northguard_trip(need):
+        if self.cfg.northguard_trips and await self.northguard_trip(need, strict):
             return
-        await self.rest(need)
+        await self.rest(need, strict)
 
-    async def northguard_trip(self, need: str) -> bool:
+    async def northguard_trip(self, need: str, strict: bool = False) -> bool:
         """Mark the camp, walk to Northguard, take wisps or rest there, Recall back.
 
         True when the trip ran (whatever the globe did); False when it could
@@ -497,7 +647,7 @@ class SeedFarm:
         blackbox.event("northguard_trip", need=need)
 
         async def errand() -> None:
-            await self.gather(need)
+            await self.gather(need, strict)
 
         went = await trip(
             self.client,
@@ -511,45 +661,63 @@ class SeedFarm:
             logger.info("seeds: could not reach Northguard; resting here instead")
         return went
 
-    async def gather(self, need: str) -> None:
-        """In Northguard: walk onto each wisp of the kind needed, else stand still, until it is back."""
-        from .navigate import walk_in_zone
+    async def gather(self, need: str, strict: bool = False) -> None:
+        """In Northguard: fill `need` to full on its wisps, then top up the other globe.
 
-        limit = time.monotonic() + self.cfg.rest_minutes * 60.0
-        self.controller.allow_idle(self.cfg.rest_minutes * 60.0 + 60.0)
-        taken: set[int] = set()
-        next_log = 0.0
+        It used to leave at the camp's "ready" mark (55% mana): with 120 max
+        mana that was ~6 min of fighting per trip (10-12 night). The wisps
+        respawn fast, so a trip now fills the globe (`seeds.northguard_full`),
+        up to `seeds.northguard_minutes`.
+        """
+        minutes = self.cfg.northguard_minutes
+        limit = time.monotonic() + minutes * 60.0
+        self.controller.allow_idle(minutes * 60.0 + 60.0)
         try:
-            while time.monotonic() < limit:
-                await self.controller.checkpoint()
-                health, mana = await self.ratios()
-                if recovered(need, health, mana):
-                    logger.info(
-                        f"seeds: {need} is back in Northguard (health {_pct(health)}, mana {_pct(mana)})"
-                    )
+            for kind in (need, "mana" if need == "health" else "health"):
+                if not await self.fill(kind, limit, strict=strict and kind == need):
                     return
-                spot = await self.wisp_spot(need, taken)
-                if spot is not None:
-                    gid, place = spot
-                    taken.add(gid)
-                    await walk_in_zone(
-                        self.client, place, why=f"{need} wisp", controller=self.controller, reach=25.0
-                    )
-                    await asyncio.sleep(0.8)
-                    continue
-                if time.monotonic() >= next_log:
-                    next_log = time.monotonic() + 30.0
-                    logger.info(
-                        f"seeds: no {need} wisp in Northguard; standing "
-                        f"(health {_pct(health)}, mana {_pct(mana)})"
-                    )
-                await asyncio.sleep(3.0)
-            logger.info(
-                f"seeds: {need} still low after {self.cfg.rest_minutes:.0f} min in Northguard; "
-                "going back anyway"
-            )
         finally:
             self.controller.end_idle()
+
+    async def fill(self, kind: str, limit: float, *, strict: bool = False) -> bool:
+        """Walk onto `kind` wisps (or stand) until it is full. False when the trip should end."""
+        from .navigate import walk_in_zone
+
+        full = self.cfg.northguard_full
+        taken: dict[int, float] = {}
+        next_log = 0.0
+        while time.monotonic() < limit:
+            await self.controller.checkpoint()
+            if (await self.client.zone_name() or "") != NORTHGUARD:
+                return False
+            health, mana = await self.ratios()
+            ratio = health if kind == "health" else mana
+            if is_full(ratio, full, strict):
+                logger.info(f"seeds: {kind} is full in Northguard (health {_pct(health)}, mana {_pct(mana)})")
+                return True
+            now = time.monotonic()
+            spot = await self.wisp_spot(kind, {g for g, t in taken.items() if now - t < WISP_RETRY})
+            if spot is not None:
+                gid, place = spot
+                taken[gid] = now
+                await walk_in_zone(
+                    self.client, place, why=f"{kind} wisp", controller=self.controller, reach=25.0
+                )
+                await asyncio.sleep(0.8)
+                continue
+            if now >= next_log:
+                next_log = now + 30.0
+                logger.info(
+                    f"seeds: waiting for {kind} wisps to respawn in Northguard "
+                    f"(health {_pct(health)}, mana {_pct(mana)})"
+                )
+            await asyncio.sleep(2.0)
+        health, mana = await self.ratios()
+        logger.info(
+            f"seeds: {self.cfg.northguard_minutes:.0f} min in Northguard is up "
+            f"(health {_pct(health)}, mana {_pct(mana)}); going back"
+        )
+        return False
 
     async def wisp_spot(self, need: str, taken: set[int]):
         """(id, position) of the nearest wisp of that kind not walked to yet, or None."""
@@ -620,7 +788,7 @@ class SeedFarm:
         await asyncio.sleep(1.0)
         return result.outcome == "reached"
 
-    async def rest(self, need: str) -> None:
+    async def rest(self, need: str, strict: bool = False) -> None:
         """Stand still. Whether the globe refills out of combat is logged as it goes."""
         from .farm import in_fight
 
@@ -636,7 +804,7 @@ class SeedFarm:
                 if await in_fight(self.client):
                     return
                 health, mana = await self.ratios()
-                if recovered(need, health, mana):
+                if recovered(need, health, mana, strict):
                     logger.info(f"seeds: {need} is back (health {_pct(health)}, mana {_pct(mana)})")
                     return
                 if time.monotonic() >= next_log:

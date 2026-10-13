@@ -61,13 +61,22 @@ walks back to home and waits for respawns; if that walk sticks three times,
 home moves to where the wizard is. Each round casts Empower, then Scarecrow,
 and passes while the next of those is not ready. Deathblade is not used. A
 death drain is used only when health is low and that next card cannot be
-cast. Low health or mana out of a fight: a potion if one is charged, a wisp
+cast. A duel it can only lose is fled: Scarecrow in hand but uncastable for
+want of mana, or health under 30% with nothing castable to heal. The need
+it fled for (or both, after a defeat lands it in Northguard) is refilled
+before the next pull. Low health or mana out of a fight: a potion if one is charged, a wisp
 within reach, else it stands still for up to `seeds.rest_minutes` and logs
-whether the globe refilled. A backpack two slots from full stops the run, so
-a dropped couch potato seed is not lost. Out of the pass (a defeat, a stray
-gate) it walks back.
-
-What `mode: seeds` does not do: rest in Northguard or sell at the Bazaar.
+whether the globe refilled (with `seeds.northguard_trips`, it marks the camp,
+walks to Northguard's wisps and Recalls back first). A backpack two slots
+from full is quick sold where the wizard stands (`selling.quick_sell`): B
+opens the backpack, its Quick Sell button opens the sell list, and only rows
+named like loot new this run are ticked (never couch potatoes, equipped
+gear, or a name shared with an older item), a page at a time, each sale
+checked against the game's summary (no pets). If the rows show no names it
+uses Select All in the gear view only when the list has no more rows than
+this run's new gear, which means older gear is locked. If no room is made,
+the run stops so a dropped couch potato seed is not lost. Out of the pass (a
+defeat, a stray gate) it walks back.
 
 `mode: reagents` (Windows) only gathers the reagent that was asked for.
 `chores` (Windows) is the list above. Deaths, low health, a missed zone,
@@ -188,6 +197,15 @@ Scrap iron is a ground node, not a mob drop worth fighting. The nodes that
 matter are in Marleybone, around the teleporters in Chelsea Court, Knight's
 Court, and Newgate Prison. The bot walks those streets and picks up scrap
 iron only. It does not realm-hop.
+
+On the Mac, reagent farming is `mode: gather` (`./mac/run.sh gather`), all
+on foot. The game's zone files list every spot a reagent can spawn on
+(`python3 -m wiz101_auto.reagent_spots MooShu BlackLotus`). The bot tours the
+spots of the best few zones (most spots per minute of walking, in one area),
+walks around creatures, picks up each reagent it sees, and flees any duel
+it is pulled into. Black Lotus starts in Shirataki Temple, then Kishibe
+Village and the Cave of Solitude. `gather.reagent`, `gather.zones` and
+`gather.zone_count` change what and where.
 
 ## 4. Fishing
 

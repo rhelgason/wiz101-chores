@@ -4,6 +4,7 @@
 #
 #   mac/run.sh pet        dance games in the Pet Pavilion
 #   mac/run.sh seeds      Savarstaad seed farm (start in Boar Camp)
+#   mac/run.sh gather     reagent farm (gather.reagent in config.yaml; Black Lotus by default)
 #   mac/run.sh            whatever config.yaml says (pet or seeds on this Mac)
 #   mac/run.sh doctor     versions and paths
 #
@@ -72,9 +73,9 @@ CONFIG="config.yaml"
 MODE=""
 case "${1:-}" in
   "" ) ;;
-  pet|seeds) MODE="$1" ;;
+  pet|seeds|gather) MODE="$1" ;;
   chores|reagents)
-    echo "$1 travels by teleport, and teleports closed this Wine client. On the Mac: pet or seeds."
+    echo "$1 travels by teleport, and teleports closed this Wine client. On the Mac: pet, seeds or gather."
     exit 1 ;;
   *) CONFIG="$1" ;;
 esac

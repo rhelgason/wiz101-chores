@@ -44,6 +44,9 @@ DATA_HOOKS = (
     ("render_context", "RenderContextHook", "current_render_context", "current_render_context_addr"),
 )
 DANCE = ("dance", "DanceGameMovesHook", "dance_game_moves", "dance_game_moves")
+# Opt-in (safety.data_jumps): jump.PositionHook, WizWalker's movement hook
+# without its per-jump code patches. In once; a jump is data writes after that.
+JUMP = ("jump", "PositionHook", "jump_helper", "jump_helper")
 
 
 class HookStateError(RuntimeError):
@@ -126,6 +129,10 @@ async def hook_state(handler, record: dict) -> str:
 
 
 def _hook_class(name: str):
+    if name == "PositionHook":
+        from .jump import PositionHook
+
+        return PositionHook
     if name == "DanceGameMovesHook":
         from .petdance import DanceGameMovesHook
 
@@ -217,7 +224,7 @@ class Hooks:
         }
         save_session(self.session)
 
-    async def attach(self, *, dance: bool = False, teleport: bool = False) -> None:
+    async def attach(self, *, dance: bool = False, teleport: bool = False, jump: bool = False) -> None:
         """Adopt this game's recorded hooks, or install them. Raises HookStateError."""
         from .rehook import install_scan_guard
 
@@ -264,7 +271,7 @@ class Hooks:
                 blackbox.event("hook_adopt", hooks=["mouse"])
             elif old.get("mouse_originals"):
                 await self._repair_mouse()
-        wanted = list(DATA_HOOKS) + ([DANCE] if dance else [])
+        wanted = list(DATA_HOOKS) + ([DANCE] if dance else []) + ([JUMP] if jump else [])
         for name, cls_name, base_key, export_attr in wanted:
             if name in self.session["hooks"]:
                 continue
@@ -320,7 +327,7 @@ class Hooks:
         hook = cls(handler)
         pattern, module = await hook.get_pattern()
         hook.jump_address = await hook.get_jump_address(pattern, module=module)
-        hook.hook_address = await hook.get_hook_address(50)
+        hook.hook_address = await hook.get_hook_address(getattr(cls, "cave_size", 50))
         hook.hook_bytecode = await hook.get_hook_bytecode()
         hook.jump_bytecode = await hook.get_jump_bytecode()
         hook.jump_original_bytecode = await hook.read_bytes(hook.jump_address, len(hook.jump_bytecode))

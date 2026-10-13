@@ -2,7 +2,8 @@
 
 `mode: pet` walks to the Pet Pavilion from wherever the wizard is (on foot,
 navigate.py), walks onto the dance sigil, plays the dance game on the
-Wizard City track while the energy globe can pay, feeds the first snack
+stage `pet.stage` picks (petplan.pick_stage: by default the one that trains
+the stats furthest below their caps) while the energy globe can pay, feeds the first snack
 offered after each win, and waits for energy in between. Nothing is
 teleported to: on the Mac, teleports closed the client.
 
@@ -148,19 +149,30 @@ async def post_key(window_handle: int, key: str | int, seconds: float = 0.3, *, 
     send(WM_KEYUP, vk, 0)
 
 
+MOVE_VKS = {0x57, 0x41, 0x53, 0x44}  # W A S D
+
+
 def install_wine_keys(client) -> None:
-    """Movement and hotkeys go through PostMessageW.
+    """Movement through SendInput, other hotkeys through PostMessageW.
 
     wizwalker's send_key and goto use SendMessageW. On this Wine build that
     call often never arrives, so the wizard turns and stays put. The dance
-    arrows already post their keys. This replaces those two methods before
-    the pause gate wraps send_key. Teleport is unchanged.
+    arrows already post their keys; W/A/S/D go as real key state (walk.Keys).
+    This replaces those two methods before the pause gate wraps send_key. Teleport is unchanged.
     """
     if getattr(client, "_wine_keys", False):
         return
 
     async def send_key(key, seconds: float = 0.0):
         vk = int(getattr(key, "value", key))
+        if vk in MOVE_VKS:
+            # Held movement is read with GetAsyncKeyState: real key state, and only
+            # while Wizard101 is the active Mac app (10-10). A posted W moved 0.
+            from .walk import keys_for, request_focus
+
+            request_focus("a movement key")
+            await keys_for(client).hold(vk, float(seconds or 0.05))
+            return
         await post_key(client.window_handle, vk, float(seconds or 0.05))
 
     async def goto(x: float, y: float):
@@ -182,7 +194,7 @@ def install_wine_keys(client) -> None:
         distance = current - target
         seconds = 0.0 if distance <= 1.0 else distance / (580.0 * factor)
         await body.write_yaw(calculate_perfect_yaw(current, target))
-        await post_key(client.window_handle, 87, seconds)
+        await send_key(87, seconds)
 
     client.send_key = send_key
     client.goto = goto
@@ -361,6 +373,7 @@ class PetDancer:
         self.feed = self.cfg.feed
         self._next_check = 0.0
         self._dumped: set[str] = set()
+        self._tracks_dumped = False
 
     def done(self) -> bool:
         pet = load_pet()
@@ -418,11 +431,22 @@ class PetDancer:
         changed = False
         if kind and kind != pet.get("kind"):
             pet["kind"], changed = kind, True
-        from .petplan import note_equipped, stats_mentioned, talents_mentioned
+        from .petplan import note_equipped, stats_mentioned, talents_mentioned, trained_stats
 
-        found = stats_mentioned(texts)
+        trained = trained_stats(texts)  # "Strength: 120/255": now and max
+        if trained:
+            now = {stat: [have, most] for stat, (have, most) in trained.items()}
+            if now != pet.get("trained"):
+                pet["trained"], changed = now, True
+                logger.info("pet: stats " + ", ".join(f"{s} {a}/{b}" for s, (a, b) in trained.items()))
+            found = {stat: most for stat, (_have, most) in trained.items()}
+        else:
+            found = stats_mentioned(texts)
         if found and found != pet.get("stats"):
             pet["stats"], changed = found, True
+        if window_name == "PetGameTracks" and not trained and not self._tracks_dumped:
+            self._tracks_dumped = True
+            await self._dump_tracks(w)
         if window_name == "PetLevelUpWindow":
             have = list(pet.get("talents") or [])
             for talent in talents_mentioned(texts):
@@ -441,6 +465,39 @@ class PetDancer:
         if changed:
             save_pet(pet)
             logger.info(f"pet: {pet.get('kind') or 'the pet'} is {pet.get('stage') or '?'}")
+
+    def _choose_stage(self) -> int:
+        """Which dance stage (btnTrack0-4) to play: see petplan.pick_stage."""
+        import random
+
+        from .petplan import DANCE_STAGES, pick_stage
+
+        pet = load_pet()
+        raw = pet.get("trained")
+        trained = {s: (int(v[0]), int(v[1])) for s, v in raw.items()} if isinstance(raw, dict) else None
+        last = pet.get("dance_stage_last")
+        last = last if isinstance(last, int) else None
+        track, why = pick_stage(getattr(self.cfg, "stage", "lowest"), trained, last, random.random())
+        pet["dance_stage_last"] = track
+        save_pet(pet)
+        name, gains = DANCE_STAGES[track]
+        trains = ", ".join(f"+{n} {s}" for s, n in gains.items())
+        logger.info(f"pet: dancing {name} ({trains}): {why}")
+        blackbox.event("dance_stage", stage=name, why=why)
+        return track
+
+    async def _dump_tracks(self, window) -> None:
+        """The stage window's tree, once a run, when its stat block gave no numbers."""
+        from pathlib import Path
+
+        try:
+            lines = await ui.dump_tree(window, max_depth=8, with_types=True)
+            path = (blackbox.folder() or Path("state")) / "pet_tracks_window.txt"
+            path.parent.mkdir(exist_ok=True)
+            path.write_text("\n".join(lines), encoding="utf-8")
+            logger.info(f"pet: no stat numbers in the stage window; wrote its windows to {path}")
+        except Exception as exc:
+            logger.info(f"pet: could not write the stage window ({exc})")
 
     async def trip(
         self,
@@ -604,6 +661,13 @@ class PetDancer:
                 return await _wait_for(lambda: _visible(root, "PetGameTracks"), 3.0)
             logger.info("pet: pressing X for the dance game")
             await ui.press_x(self.client)
+            if not await _wait_for(lambda: _visible(root, "PetGameTracks"), 1.5) and await self._prompt_up():
+                # The posted X is not always read; X as real key state, the way doors open.
+                from .walk import VK, keys_for, request_focus
+
+                request_focus("pressing X for the dance game")
+                await asyncio.sleep(0.5)
+                await keys_for(self.client).tap(VK["X"])
             if await _wait_for(lambda: _visible(root, "PetGameTracks"), 3.0):
                 return True
         return await _visible(root, "PetGameTracks") is not None
@@ -638,8 +702,12 @@ class PetDancer:
         # started on the other window. Settle first, and press again while
         # the window is still up.)
         await asyncio.sleep(1.5)
+        track = self._choose_stage()
         for _ in range(3):
-            await _click(self.client, "PetGameTracks", "btnTrack0")  # the Wizard City dance track
+            if not await _click(self.client, "PetGameTracks", f"btnTrack{track}"):
+                logger.info(f"pet: no stage button {track}; dancing Wizard City")
+                track = 0
+                await _click(self.client, "PetGameTracks", "btnTrack0")
             await asyncio.sleep(0.5)
             await _click(self.client, "PetGameTracks", "btnNext")  # Play
             if await _wait_for(lambda: _hidden(root, "PetGameTracks"), 4):
@@ -776,9 +844,15 @@ async def pet_loop(client, cfg, controller, task: dict) -> None:
         await controller.checkpoint()
         try:
             if await in_fight(client):
-                task["name"] = "waiting for the duel to end"
-                say("duel", "pet: a duel is on; waiting for it to end (pet mode does not fight)")
-                await asyncio.sleep(1.0)
+                on_fight = getattr(client, "_on_fight", None)
+                if on_fight is not None:
+                    task["name"] = "fleeing a duel"
+                    say("duel", "pet: a duel is on; fleeing it (played out only if Flee fails twice)")
+                    await on_fight()
+                else:
+                    task["name"] = "waiting for the duel to end"
+                    say("duel", "pet: a duel is on; waiting for it to end")
+                    await asyncio.sleep(1.0)
                 continue
             if not await is_free(client):
                 task["name"] = "waiting (dialogue or loading)"

@@ -34,11 +34,24 @@ GATE_REACH = 35.0
 DOOR_REACH = 140.0
 PUSH_SECONDS = 1.6  # W held through a gate that the walk did not cross yet
 MAX_REPLANS = 3
+TROUBLE_REACH = 250.0  # graph edges passing this close to a stuck spot are avoided
+TROUBLE_MINUTES = 60.0  # ... for this long, on every walk in that zone
+RETREAT_SECONDS = 6.0
+AVOID_REACH = 800.0  # a route keeps its edges this far from each spot `avoid` names
+LEG_CLEAR = 500.0  # a creature this close to the next straight leg: plan around it first
+LET_PASS = 6.0  # out of replans: wait this long for it to wander off the leg
+JUMP_MIN = 1000.0  # with safety.data_jumps, a walk longer than this (on the graph) is jumped (jump.py)
+LANDING_CLEAR = 700.0  # a landing keeps this far from creatures (jump.MOB_CLEAR)
+LANDING_NEAR = 1500.0  # ... else the clear graph point nearest the goal, within this
+# zone -> [(x, y, when)]: where walks got stuck this run (10-12: 8 trips to the
+# Northguard gate each wedged on the same rock near Boar Camp, 96 stuck legs).
+_trouble: dict[str, list[tuple[float, float, float]]] = {}
 MAX_STEPS = 24
 DORM = "WizardCity/Interiors/WC_Housing_Dorm_Interior"
 DORM_DOOR = (-205.0, 13.0, 0.0)
 
 Fight = Callable[[], Awaitable[None]]
+Avoid = Callable[[], Awaitable[list]]  # spots (x, y, ...) whose graph edges a route keeps away from
 
 
 def leg_seconds(dist: float) -> float:
@@ -50,6 +63,67 @@ def blocked_edge(graph, a, b) -> set[tuple[int, int]]:
     """Both directions of the graph edge nearest the leg from `a` to `b`."""
     x, y = graph.nearest(a)[0], graph.nearest(b)[0]
     return {(x, y), (y, x)} if x != y else set()
+
+
+def _seg_dist(p, a, b) -> float:
+    """Distance in x, y from point `p` to the segment a-b."""
+    ax, ay, bx, by = a[0], a[1], b[0], b[1]
+    dx, dy = bx - ax, by - ay
+    length = dx * dx + dy * dy
+    t = 0.0 if length == 0 else max(0.0, min(1.0, ((p[0] - ax) * dx + (p[1] - ay) * dy) / length))
+    return math.dist(p[:2], (ax + t * dx, ay + t * dy))
+
+
+def edges_near(graph, spot, reach: float = TROUBLE_REACH) -> set[tuple[int, int]]:
+    """Both directions of every graph edge that passes within `reach` of `spot`."""
+    out = set()
+    for a, nexts in graph.edges.items():
+        for b in nexts:
+            if a < b and _seg_dist(spot, graph.nodes[a], graph.nodes[b]) <= reach:
+                out |= {(a, b), (b, a)}
+    return out
+
+
+def walk_length(graph, a, b) -> float:
+    """How far the walk from a to b is on the zone graph; a straight line x1.5 off it."""
+    straight = math.dist(a[:2], b[:2])
+    path = graph.route(a, b) if graph is not None else None
+    if not path:
+        return straight * 1.5
+    points = [a, *path]
+    return sum(math.dist(p[:2], q[:2]) for p, q in zip(points, points[1:], strict=False))
+
+
+def landing_spot(goal, mobs: list, graph, clear: float = LANDING_CLEAR, near: float = LANDING_NEAR):
+    """Where to jump for `goal`: the goal itself when no creature is within `clear`,
+    else the graph point nearest it that is (within `near`), else None."""
+
+    def ok(p) -> bool:
+        return all(math.dist(p[:2], m[:2]) > clear for m in mobs)
+
+    if ok(goal):
+        return tuple(goal)
+    if graph is None:
+        return None
+    options = [
+        p for p in graph.nodes.values() if math.dist(p[:2], goal[:2]) <= near and ok(p)
+    ]
+    return min(options, key=lambda p: math.dist(p[:2], goal[:2]), default=None)
+
+
+def note_trouble(zone: str, spot, now: float | None = None) -> None:
+    _trouble.setdefault(zone, []).append((spot[0], spot[1], time.monotonic() if now is None else now))
+
+
+def trouble_edges(zone: str, graph, now: float | None = None) -> set[tuple[int, int]]:
+    """Edges near this zone's recent stuck spots."""
+    now = time.monotonic() if now is None else now
+    keep = [t for t in _trouble.get(zone, []) if now - t[2] < TROUBLE_MINUTES * 60.0]
+    _trouble[zone] = keep
+    out: set[tuple[int, int]] = set()
+    for x, y, _when in keep:
+        out |= edges_near(graph, (x, y))
+    return out
 
 
 def load_doors() -> dict[str, tuple[float, float, float]]:
@@ -71,10 +145,76 @@ def remember_door(zone: str, spot) -> None:
 
 
 class Navigator:
-    def __init__(self, client, controller=None, on_fight: Fight | None = None):
+    def __init__(self, client, controller=None, on_fight: Fight | None = None, avoid: Avoid | None = None):
         self.client = client
         self.controller = controller
         self.on_fight = on_fight
+        self.avoid = avoid
+
+    def _jumps_on(self) -> bool:
+        jumper = getattr(self.client, "_jump", None)
+        return jumper is not None and jumper.enabled
+
+    async def _jump_toward(self, goal, why: str, reach: float, graph, interrupt, *, stuck: bool = False):
+        """Jump to `goal`, or a clear spot beside it, when the walk would be long or is stuck.
+
+        'reached' or 'left zone' when the jump ends the walk; None to walk (the rest of) it.
+        """
+        if not self._jumps_on():
+            return None
+        jumper = self.client._jump
+        me = await self.here()
+        if math.dist(me[:2], goal[:2]) <= reach:
+            return None
+        if not stuck and walk_length(graph, me, goal) < JUMP_MIN:
+            return None
+        landing = landing_spot(goal, await jumper.mobs(), graph)
+        if landing is None:
+            logger.info(f"travel: no clear place to land near {_pt(goal)}; walking")
+            return None
+        if not await jumper(landing, why=f"{why} (stuck)" if stuck else why):
+            return None
+        if await interrupt():
+            return "left zone"
+        if math.dist((await self.here())[:2], goal[:2]) <= reach:
+            return "reached"
+        return None  # landed beside it: the walk covers the last steps
+
+    async def _avoided(self) -> list:
+        if self.avoid is None:
+            return []
+        try:
+            return list(await self.avoid())
+        except Exception as exc:
+            if type(exc).__name__ == "ClientClosedError":
+                raise
+            return []
+
+    async def _creatures_on_leg(self, a, b) -> list:
+        """Avoided spots within LEG_CLEAR of the straight leg a-b."""
+        return [s for s in await self._avoided() if _seg_dist(s, a, b) < LEG_CLEAR]
+
+    async def _let_pass(self, a, b, seconds: float = LET_PASS) -> None:
+        """No way around left: give a wandering creature a few seconds to move off the leg."""
+        end = time.monotonic() + seconds
+        while time.monotonic() < end and await self._creatures_on_leg(a, b):
+            await self.checkpoint()
+            await asyncio.sleep(0.5)
+
+    async def _avoid_edges(self, graph) -> set[tuple[int, int]]:
+        """Edges near the spots `avoid` names (creatures, for a reagent walk)."""
+        if self.avoid is None:
+            return set()
+        try:
+            spots = await self.avoid()
+        except Exception as exc:
+            if type(exc).__name__ == "ClientClosedError":
+                raise
+            return set()
+        out: set[tuple[int, int]] = set()
+        for spot in spots:
+            out |= edges_near(graph, spot, AVOID_REACH)
+        return out
 
     async def checkpoint(self) -> None:
         if self.controller is not None:
@@ -151,9 +291,18 @@ class Navigator:
                     raise
                 return False
 
+        jumped = await self._jump_toward(goal, why, reach, graph, interrupt)
+        if jumped:
+            return jumped
+
         for plan in range(MAX_REPLANS + 1):
             me = await self.here()
-            path = graph.route(me, goal, blocked) if graph is not None else None
+            path = None
+            if graph is not None:
+                avoid = blocked | trouble_edges(zone, graph) | await self._avoid_edges(graph)
+                path = graph.route(me, goal, avoid)
+                if path is None and avoid != blocked:
+                    path = graph.route(me, goal, blocked)  # no way around the trouble: try it anyway
             if path is None:
                 if graph is not None:
                     logger.info(f"travel: no walking path in {zone} to {_pt(goal)}; walking straight")
@@ -164,6 +313,18 @@ class Navigator:
             failed = False
             for i, point in enumerate(path):
                 last = i == len(path) - 1
+                near = await self._creatures_on_leg(prev, point)
+                if near and graph is not None and plan < MAX_REPLANS:
+                    # Plan around it now, not after its duel (10-12 gather: a fight
+                    # within seconds of each tour, and a flee there lands in Jade Palace).
+                    for spot in near:
+                        blocked |= edges_near(graph, spot, AVOID_REACH)
+                    logger.info(f"travel: a creature by leg {i + 1} at {_pt(near[0])}; planning around it")
+                    blackbox.event("walk_avoid", zone=zone, leg=i + 1, at=_r(near[0]))
+                    failed = True
+                    break
+                if near:
+                    await self._let_pass(prev, point)
                 result = await walk_point(
                     self.client,
                     point,
@@ -185,9 +346,36 @@ class Navigator:
                     await self._busy()
                     return "fight"
                 if result.outcome in ("stuck", "timeout"):
+                    here = await self.here()
+                    note_trouble(zone, here)
                     if graph is not None:
-                        blocked |= blocked_edge(graph, prev, point)
-                    logger.info(f"travel: leg {i + 1} {result.outcome}; planning around it")
+                        blocked |= blocked_edge(graph, prev, point) | edges_near(graph, here)
+                    logger.info(
+                        f"travel: leg {i + 1} {result.outcome} at {_pt(here)}; planning around it"
+                    )
+                    blackbox.event("walk_trouble", zone=zone, at=_r(here), leg=i + 1)
+                    jumped = await self._jump_toward(goal, why, reach, graph, interrupt, stuck=True)
+                    if jumped:
+                        return jumped
+                    if self._jumps_on() and await interrupt():
+                        return "left zone"
+                    if math.dist(here[:2], prev[:2]) > WAYPOINT_REACH:
+                        # Back to the last point reached on foot, then plan from there.
+                        back = await walk_point(
+                            self.client,
+                            prev,
+                            why=f"{why}: backing off",
+                            stop_within=WAYPOINT_REACH,
+                            max_seconds=RETREAT_SECONDS,
+                            fight=fight,
+                            interrupt=interrupt,
+                            checkpoint=self.checkpoint,
+                        )
+                        if back.outcome == "fight":
+                            await self._busy()
+                            return "fight"
+                        if back.outcome == "interrupted" and await interrupt():
+                            return "left zone"
                     failed = True
                     break
                 prev = point
@@ -225,6 +413,13 @@ class Navigator:
                 # On the gate's spot but still here: keep walking the same way through it.
                 keys = keys_for(self.client)
                 await keys.hold(VK["W"], PUSH_SECONDS)
+                if "confirm" in kind.lower():
+                    # "dungeonExitConfirm" (leaving Shirataki Temple): the game asks first.
+                    from . import ui
+
+                    await asyncio.sleep(0.8)
+                    if await ui.confirm_modal(self.client):
+                        logger.info(f"travel: confirmed leaving for {nxt.split('/')[-1]}")
                 await wait_for_loading(self.client, appear_timeout=3.0)
             if await self.zone() != here:
                 return True
@@ -291,6 +486,7 @@ class Navigator:
         went_home = False
         began = time.monotonic()
         start = await self.zone()
+        start_pos = await self.here()
         blackbox.event("travel_start", start=start, dest=dest)
         logger.info(f"travel: {start} -> {dest}, on foot")
         for _ in range(max_steps):
@@ -312,6 +508,19 @@ class Navigator:
                 continue
             step = travel_step(zone, dest, gates, doors, blocked)
             if step is None:
+                if blocked:
+                    # The route exists; walking it failed. Go Home would only add a
+                    # house (no walking graph) and its door to the trip (10-12 01:51:
+                    # keys were not reaching the game, and Go Home left the wizard
+                    # stuck in the house). The caller retries this same route later.
+                    stuck = ", ".join(f"{a.split('/')[-1]} -> {b.split('/')[-1]}" for a, b in sorted(blocked))
+                    if zone == start and math.dist((await self.here())[:2], start_pos[:2]) < 50:
+                        return self._fail(
+                            dest,
+                            "the wizard never moved: keys are not reaching Wizard101 "
+                            "(is its window in front, and the Mac awake and unlocked?)",
+                        )
+                    return self._fail(dest, f"the gate(s) {stuck} did not work; not going home")
                 if not went_home:
                     went_home = True
                     logger.info(
@@ -387,9 +596,16 @@ async def go_to_zone(client, dest: str, controller=None, on_fight: Fight | None 
 
 
 async def walk_in_zone(
-    client, goal, *, why: str, controller=None, on_fight: Fight | None = None, reach: float = WAYPOINT_REACH
+    client,
+    goal,
+    *,
+    why: str,
+    controller=None,
+    on_fight: Fight | None = None,
+    reach: float = WAYPOINT_REACH,
+    avoid: Avoid | None = None,
 ) -> str:
-    nav = Navigator(client, controller, on_fight)
+    nav = Navigator(client, controller, on_fight, avoid)
     outcome = "fight"
     for _ in range(4):
         outcome = await nav.walk_in_zone(goal, why=why, reach=reach)

@@ -119,7 +119,7 @@ def test_a_wizard_that_does_not_move_sidesteps_then_reports_stuck():
     world = World(step=0.0)
     result = asyncio.run(walk.walk_point(world.client(), (2000.0, 0.0, 0.0), why="test", max_seconds=5))
     assert result.outcome == "stuck"
-    assert world.keys.log[:3] == ["A", "D", "A"]
+    assert world.keys.log[:6] == ["S", "A", "W", "S", "D", "W"]  # back up, turn, walk on (no strafe key)
     assert not world.keys.down
 
 

@@ -304,3 +304,67 @@ def stats_mentioned(texts: list[str]) -> dict:
     if any(name not in found for name in PERFECT_STATS):
         return {}
     return found
+
+
+# The dance game's stages (btnTrack0-4) are the same difficulty; each trains
+# different stats on top of XP (the player's numbers, 10-11).
+DANCE_STAGES = (
+    ("Wizard City", {"agility": 4}),
+    ("Krokotopia", {"strength": 1, "agility": 3}),
+    ("Marleybone", {"intellect": 1, "agility": 3}),
+    ("MooShu", {"intellect": 1, "agility": 2, "will": 1}),
+    ("Dragonspyre", {"agility": 2, "intellect": 2}),
+)
+STAGE_CHOICES = ("lowest", "rotate", "random")
+_TRAINED_LINE = re.compile(
+    r"\b(strength|intellect|agility|will|power)\b\D{0,12}?(\d{1,3})\s*/\s*(\d{1,3})",
+    re.I,
+)
+
+
+def trained_stats(texts: list[str]) -> dict[str, tuple[int, int]]:
+    """{stat: (now, max)} from the dance window's stat block ("Strength: 120/255").
+    All five or nothing."""
+    found: dict[str, tuple[int, int]] = {}
+    for match in _TRAINED_LINE.finditer(" ".join(texts)):
+        name, now, most = match.group(1).lower(), int(match.group(2)), int(match.group(3))
+        if name not in found and 0 <= now <= most <= 400 and most > 0:
+            found[name] = (now, most)
+    if any(name not in found for name in PERFECT_STATS):
+        return {}
+    return found
+
+
+def stage_score(gains: dict[str, int], trained: dict[str, tuple[int, int]]) -> float:
+    """How much a stage helps: points that still fit under each cap, weighted
+    by how far below its cap that stat is (the lowest stats count most)."""
+    score = 0.0
+    for stat, points in gains.items():
+        now, most = trained.get(stat, (0, 0))
+        gap = max(0, most - now)
+        if gap:
+            score += min(points, gap) * gap / most
+    return score
+
+
+def pick_stage(choice: str, trained: dict | None, last: int | None, roll: float = 0.0) -> tuple[int, str]:
+    """(track index, why). `choice`: lowest, rotate, random, or a stage name.
+    "lowest" without a stat read rotates, so the stats still spread."""
+    count = len(DANCE_STAGES)
+    names = [name.lower() for name, _gains in DANCE_STAGES]
+    choice = (choice or "lowest").strip().lower()
+    if choice in names:
+        return names.index(choice), "set in config"
+    if choice == "random":
+        return min(int(roll * count), count - 1), "random"
+    after = 0 if last is None else (last + 1) % count
+    if choice == "lowest" and trained:
+        scores = [stage_score(gains, trained) for _name, gains in DANCE_STAGES]
+        if max(scores) > 0:
+            order = [(after + i) % count for i in range(count)]  # ties go round
+            best = max(order, key=lambda i: scores[i])
+            low = sorted((now / most, stat) for stat, (now, most) in trained.items() if most and now < most)
+            lowest = ", ".join(f"{stat} {trained[stat][0]}/{trained[stat][1]}" for _r, stat in low[:2])
+            return best, f"trains the lowest stats ({lowest})"
+        return after, "every trained stat is at its cap; rotating"
+    return after, "rotating (no stat read yet)" if choice == "lowest" else "rotating"

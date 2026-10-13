@@ -31,13 +31,20 @@ def test_post_key_holds_then_releases():
     assert sent[-1] == (petdance.WM_KEYUP, 87, 0)
 
 
-def test_wine_send_key_posts_the_keycode(monkeypatch):
-    posted = []
+def test_wine_send_key_holds_movement_and_posts_the_rest(monkeypatch):
+    posted, held = [], []
 
     async def fake(hwnd, key, seconds=0.3, *, post=None):
         posted.append((hwnd, key, seconds))
 
+    class Keys:
+        async def hold(self, vk, seconds):
+            held.append((vk, seconds))
+
+    from wiz101_auto import walk
+
     monkeypatch.setattr(petdance, "post_key", fake)
+    monkeypatch.setattr(walk, "keys_for", lambda client: Keys())
 
     class Client:
         window_handle = 7
@@ -48,11 +55,13 @@ def test_wine_send_key_posts_the_keycode(monkeypatch):
     class Key:
         value = 87
 
-    asyncio.run(client.send_key(Key(), 0.2))
-    assert posted == [(7, 87, 0.2)]
+    asyncio.run(client.send_key(Key(), 0.2))  # W: real key state, so the wizard moves
+    asyncio.run(client.send_key(0x58, 0.2))  # X: posted
+    assert held == [(87, 0.2)]
+    assert posted == [(7, 0x58, 0.2)]
     petdance.install_wine_keys(client)
-    asyncio.run(client.send_key(Key(), 0.2))
-    assert posted == [(7, 87, 0.2), (7, 87, 0.2)]
+    asyncio.run(client.send_key(0x58, 0.2))
+    assert posted == [(7, 0x58, 0.2), (7, 0x58, 0.2)]
 
 
 def test_request(tmp_path, monkeypatch):

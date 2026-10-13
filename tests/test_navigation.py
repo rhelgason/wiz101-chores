@@ -204,6 +204,7 @@ def world(monkeypatch):
     monkeypatch.setattr(walk, "AIM_EVERY", 0.0005)
     monkeypatch.setattr(walk, "PROGRESS_EVERY", 0.002)
     monkeypatch.setattr(navigate, "PUSH_SECONDS", 0.01)
+    monkeypatch.setattr(navigate, "_trouble", {})
     from wiz101_auto import world as world_mod
 
     async def no_load(*_a, **_k):
@@ -345,3 +346,65 @@ def test_position_comes_from_the_client_objects_body_not_the_player_hook():
         client_object=SimpleNamespace(actor_body=actor_body), body=SimpleNamespace(position=stale)
     )
     assert asyncio.run(walk.position(client)) == (1.0, 2.0, 3.0)
+
+
+def test_a_gate_that_will_not_load_does_not_send_the_wizard_home(world, monkeypatch):
+    """10-12 01:51: no key reached the game, the gate 'failed', and Go Home
+    left the wizard stuck in the house. A failed route is now just a failure."""
+    went_home = []
+
+    async def home(*_a, **_k):
+        went_home.append(True)
+        return True
+
+    sys.modules["wiz101_auto.travel"].go_home = home
+
+    async def frozen(c, point, **kwargs):
+        return walk.WalkResult("stuck", 500, 500, 0, 1)
+
+    monkeypatch.setattr(walk, "walk_point", frozen)
+    monkeypatch.setattr(walk, "keys_for", lambda c: SimpleNamespace(hold=_noop))
+    client = world.client()
+    assert asyncio.run(navigate.go_to_zone(client, "Beta/B_Hub")) is False
+    assert went_home == []
+
+
+async def _noop(*_a, **_k):
+    return None
+
+
+def test_edges_near_a_stuck_spot_are_found_both_ways():
+    nodes, edges = grid(3, 1)
+    graph = navmesh.NavGraph.parse(nav_bytes(nodes, edges))
+    near = navigate.edges_near(graph, (480.0, 100.0), reach=150)
+    ids = sorted(graph.nodes, key=lambda n: graph.nodes[n][0])
+    assert {(ids[0], ids[1]), (ids[1], ids[0]), (ids[1], ids[2]), (ids[2], ids[1])} == near
+    assert navigate.edges_near(graph, (480.0, 400.0), reach=150) == set()
+
+
+def test_stuck_spots_are_avoided_on_later_walks_then_forgotten(monkeypatch):
+    monkeypatch.setattr(navigate, "_trouble", {})
+    nodes, edges = grid(3, 1)
+    graph = navmesh.NavGraph.parse(nav_bytes(nodes, edges))
+    navigate.note_trouble("Z/A", (480.0, 0.0), now=0.0)
+    assert navigate.trouble_edges("Z/A", graph, now=60.0)
+    assert navigate.trouble_edges("Z/B", graph, now=60.0) == set()
+    assert navigate.trouble_edges("Z/A", graph, now=navigate.TROUBLE_MINUTES * 60.0 + 1) == set()
+
+
+def test_a_jump_lands_on_the_goal_or_the_nearest_clear_point_beside_it():
+    nodes, edges = grid(4, 1)  # x = 0, 480, 960, 1440
+    graph = navmesh.NavGraph.parse(nav_bytes(nodes, edges))
+    goal = (960.0, 0.0, 0.0)
+    assert navigate.landing_spot(goal, [], graph) == goal
+    creature = [(900.0, 0.0, 0.0)]
+    assert navigate.landing_spot(goal, creature, graph, clear=300, near=1500)[:2] == (480.0, 0.0)
+    assert navigate.landing_spot(goal, creature, graph, clear=2000, near=1500) is None
+    assert navigate.landing_spot(goal, creature, None, clear=300) is None
+
+
+def test_walk_length_follows_the_graph():
+    nodes, edges = grid(3, 1)
+    graph = navmesh.NavGraph.parse(nav_bytes(nodes, edges))
+    assert navigate.walk_length(graph, (0.0, 0.0), (960.0, 0.0)) == pytest.approx(960.0)
+    assert navigate.walk_length(None, (0.0, 0.0), (1000.0, 0.0)) == pytest.approx(1500.0)

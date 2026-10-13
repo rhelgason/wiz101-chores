@@ -312,6 +312,7 @@ def main(argv: list[str] | None = None):
         "config": args.config,
         "mode": cfg.mode,
         "seeds": vars(cfg.seeds),
+        "gather": vars(cfg.gather),
         "safety": {k: v for k, v in vars(cfg.safety).items()},
     })
 

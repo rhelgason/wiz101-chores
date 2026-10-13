@@ -1,20 +1,24 @@
-"""Sell this run's loot at the Wizard City Bazaar, then go back to the farm.
+"""Sell this run's loot from the backpack's Quick Sell, then go back to fighting.
 
 A seeds run reads the backpack when it starts (LootBook). When the bag is
-two slots from full, `sell_trip` marks the farm spot, walks to the Bazaar
-(navigate.py: gates, the world door, Wizard City's streets), walks up to
-the shopkeeper, opens the shop, and sells only names that appeared during
-this run. A name shared with an older item, a couch potato, or anything
-equipped is not clicked. A sale that touched anything else stops selling for
-the run. Then Recall (or a walk) goes back. Nothing teleports.
+two slots from full, `quick_sell` opens the backpack (B), presses its Quick
+Sell button, and ticks only rows whose name appeared during this run: never
+a couch potato, anything equipped, or a name shared with an older item. It
+sells one page at a time and starts over, since the list shrinks. Nothing
+walks and nothing teleports.
 
-The shop's windows were never seen live: when a step does not find what it
-expects, the shop's window tree is written to the run folder.
+When the rows show no names, it may press Select All in the gear view only
+if the list holds no more rows than this run's new gear (so every older item
+is locked), and the confirmation counts agree. Otherwise it stops and says
+so. Window names come from the game's own GUI files (_Shared-WorldData.wad:
+InventorySpellbookPage, QuickSell, SellQuickSell, QuickSellConfirmationWindow);
+the first time the list opens its window tree is written to the run folder.
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
 from collections import Counter
 from dataclasses import dataclass
 
@@ -23,8 +27,10 @@ from loguru import logger
 from . import blackbox
 from .garden import is_couch_potato
 
-BAZAAR = "WizardCity/WC_Streets/Interiors/WC_OldeTown_AuctionHouse"
-SHOPKEEPER = ("elik", "silverfist", "merchant", "bazaar", "vendor", "shop")
+ROWS = 10  # shoplist0..9 (the item) beside num0..9 (its Selected box)
+MAX_PAGES = 40
+MAX_SALES = 60
+VIEWS = ("BackpackStuff", "HousingStuff", "JewelStuff")  # gear first; Select All only there
 
 # Category buttons. Clicking one selects a whole class, including old items.
 _BULK = {
@@ -72,6 +78,7 @@ _BULK = {
 class BagItem:
     perm_id: int
     name: str
+    kind: str = ""  # the template's object type: "equip_head", ... ("" unread)
 
 
 def norm_name(name: str) -> str:
@@ -109,20 +116,54 @@ def names_to_sell(
 def click_is_one_item(text: str, allowed: set[str]) -> bool:
     """A shop row for one farm drop. Category buttons are not rows."""
     key = norm_name(text)
-    if not key or key in _BULK or key.startswith("all "):
+    if not key or key in _BULK or key.startswith("all ") or is_couch_potato(key):
         return False
     return key in allowed
 
 
-def is_sell_button(name: str, text: str) -> bool:
-    """The button that sells the selection. The Sell tab is not that button."""
-    window = (name or "").lower()
-    if "tab" in window:
+def pick_rows(labels: list[str], remaining: Counter[str]) -> list[int]:
+    """Rows on this page to tick, by name. `remaining` (normalized names ->
+    how many copies are new this run) is spent as rows are picked."""
+    allowed = {key for key, count in remaining.items() if count > 0}
+    picked = []
+    for row, label in enumerate(labels):
+        key = norm_name(label)
+        if remaining.get(key, 0) > 0 and click_is_one_item(label, allowed):
+            remaining[key] -= 1
+            picked.append(row)
+    return picked
+
+
+def new_gear(baseline: set[int], items: list[BagItem]) -> int:
+    """Items new this run whose type is a piece of gear."""
+    return sum(
+        1
+        for item in items
+        if item.perm_id > 0
+        and item.perm_id not in baseline
+        and item.kind.startswith("equip")
+        and not is_couch_potato(item.name)
+    )
+
+
+def select_all_is_safe(rows: int, gear: int) -> bool:
+    """Select All only when the list cannot hold an older item: no more rows
+    than gear that dropped this run (older gear has to be locked)."""
+    return 0 < rows <= gear
+
+
+def count_text(text: str) -> int | None:
+    found = re.search(r"\d[\d,]*", text or "")
+    return int(found.group(0).replace(",", "")) if found else None
+
+
+def confirmation_ok(total: int | None, pets: int | None, ticked: int, *, by_name: bool) -> bool:
+    """The game's own summary agrees with what was ticked. A pet is never sold."""
+    if pets:
         return False
-    label = norm_name(text)
-    if label in {"sell item", "sell items", "sell selected", "confirm sale"}:
-        return True
-    return "button" in window and "sell" in window and "buy" not in window
+    if total is None:
+        return by_name  # names were checked row by row; Select All needs the count
+    return 0 < total <= ticked
 
 
 def sale_kept_the_rest(
@@ -147,6 +188,7 @@ class LootBook:
     def __init__(self):
         self.baseline: set[int] | None = None
         self.selling = True
+        self.dumped = False
 
     def see(self, items: list[BagItem]) -> None:
         if self.baseline is None:
@@ -164,7 +206,7 @@ async def _backpack(client) -> list[BagItem] | None:
                 perm = int(await item.perm_id())
             except Exception:
                 perm = 0
-            items.append(BagItem(perm, await _label(client, item)))
+            items.append(BagItem(perm, await _label(client, item), await _kind(client, item)))
         return items
     except Exception as exc:
         logger.info(f"seeds: backpack unreadable ({exc})")
@@ -216,154 +258,343 @@ async def _label(client, item) -> str:
         return ""
 
 
+async def _kind(client, item) -> str:
+    try:
+        template = await item.object_template()
+        if template is None:
+            return ""
+        from wizwalker.memory.memory_objects.game_object_template import WizGameObjectTemplate
+
+        wiz = WizGameObjectTemplate(client.hook_handler, await template.read_base_address())
+        return (await wiz.object_type()).name
+    except Exception:
+        return ""
+
+
 def _potato_count(items: list[BagItem]) -> int:
     from .garden import potatoes_in
 
     return sum(potatoes_in(item.name) for item in items)
 
 
-async def sell_here(client, controller, book: LootBook) -> None:
-    """In the Bazaar: open the shop and sell this run's new names."""
-    from . import ui
-    from .travel import entity_pos
+async def quick_sell(client, controller, book: LootBook) -> bool:
+    """Sell this run's loot through the backpack's Quick Sell. True when the
+    bag has room again."""
+    from .seeds import bag_is_full
 
     if book.baseline is None:
         logger.info("sell: the bag was never read; not selling")
-        return
+        return False
     if controller:
-        controller.allow_idle(360)
+        controller.allow_idle(300)
     try:
         before = await _backpack(client)
         equipped_ids, equipped_names = await _equipped(client)
         if before is None:
-            return
+            return False
+        wanted = names_to_sell(book.baseline, before, equipped_names)
+        gear = new_gear(book.baseline, before)
+        if not wanted:
+            logger.info("sell: everything in the bag was there before this run; nothing is sold")
+            return False
         potatoes = _potato_count(before)
         gold = await _gold(client)
-        wanted = names_to_sell(book.baseline, before, equipped_names)
-        if not wanted:
-            logger.info("sell: the bag is full of items from before this run; nothing is sold")
-            await asyncio.sleep(20.0)
-            return
-        logger.info(f"sell: selling {sum(wanted.values())} item(s) from this run at the Bazaar")
-        blackbox.event("sell", items=dict(wanted))
-        if not await _open_shop(client, entity_pos):
-            from .navigate import Navigator
-
-            logger.info("sell: the shop did not open")
-            await _dump_shop(client)
-            await Navigator(client)._dump_entities(BAZAAR)
-            return
-        if not await ui.click_text(client, "Sell"):
-            logger.info("sell: the shop has no Sell tab; leaving the bag alone")
-            await _close_shop(client)
-            return
-        await asyncio.sleep(0.4)
-        buddy = await ui.click_text(client, "Backpack Buddy")
-        if buddy:
-            logger.info("sell: opened Backpack Buddy")
-        else:
-            logger.info("sell: no Backpack Buddy button; using the sell list")
-        await asyncio.sleep(0.6)
-        clicked = await _click_loot(client, wanted)
-        if clicked == 0:
-            await _dump_shop(client)
-            logger.info("sell: the farm loot was not on the sell list; nothing was sold")
-            await _close_shop(client)
-            return
-        if not await _click_sell(client):
-            await _dump_shop(client)
-            logger.info("sell: no sell button for the selection; closing the shop")
-            await _close_shop(client)
-            return
-        await asyncio.sleep(0.4)
-        await ui.confirm_modal(client)
-        await asyncio.sleep(0.8)
-        await _close_shop(client)
-        if not await _sale_was_safe(client, book, equipped_ids, potatoes, gold):
-            book.selling = False
-            logger.info("sell: the sale touched something else; no more selling this run")
+        logger.info(
+            f"sell: quick selling {sum(wanted.values())} item(s) from this run "
+            f"({len(wanted)} name(s), {gear} piece(s) of gear)"
+        )
+        blackbox.event("quick_sell", items=dict(wanted), gear=gear)
+        if not await _open_quick_sell(client):
+            logger.info("sell: Quick Sell did not open; the windows are in quick_sell_window.txt")
+            await _dump(client, "quick_sell_window.txt")
+            return False
+        if not book.dumped:
+            book.dumped = True
+            await _dump(client, "quick_sell_window.txt")
+        remaining = Counter({norm_name(name): count for name, count in wanted.items()})
+        sold = 0
+        for view in VIEWS:
+            sold += await _sell_view(client, view, remaining, gear if view == VIEWS[0] else 0)
+            if await _fighting(client):
+                logger.info("sell: a fight started; selling again later")
+                break
     finally:
+        await _close(client)
         if controller:
             controller.end_idle()
-
-
-async def _open_shop(client, entity_pos) -> bool:
-    """Walk up to the shopkeeper and use the prompt until the shop window opens."""
-    from . import ui
-    from .navigate import Navigator, walk_in_zone
-
-    nav = Navigator(client)
-    for _ in range(4):
-        if await ui.window_at(client, ["WorldView", "shopGUI"]):
-            return True
-        place = await entity_pos(client, SHOPKEEPER)
-        if place is not None:
-            await walk_in_zone(client, (place.x, place.y, place.z), why="to the shopkeeper", reach=120.0)
-        await nav.use()
-        await asyncio.sleep(1.2)
-    return await ui.window_at(client, ["WorldView", "shopGUI"]) is not None
-
-
-async def _rows(client):
-    """Visible windows that have their own caption, not a copy of a child's."""
-    from . import ui
-
-    found = []
-
-    async def walk(window, depth: int = 0):
-        if depth > 8:
-            return []
-        texts = []
-        try:
-            if not await window.is_visible():
-                return texts
-            name = await window.name() or ""
-            text = ui._TAGS.sub("", await window.maybe_text() or "").strip()
-            for child in await window.children():
-                texts.extend(await walk(child, depth + 1))
-            if text and text not in texts:
-                found.append((window, name, text))
-            if text:
-                texts.append(text)
-        except Exception:
-            return texts
-        return texts
-
+    if sold and not await _sale_was_safe(client, book, equipped_ids, potatoes, gold):
+        book.selling = False
+        logger.warning("sell: the sale touched something else; no more selling this run")
+    logger.info(f"sell: {sold} sale(s) made")
     try:
-        await walk(client.root_window)
+        used, capacity = await client.backpack_space()
+    except Exception:
+        return False
+    return not bag_is_full(int(used), int(capacity))
+
+
+async def _open_quick_sell(client) -> bool:
+    """B opens the backpack; its QuickSell_Item button opens the sell list."""
+    from . import ui
+    from .walk import VK, keys_for, request_focus
+
+    for attempt in range(3):
+        if await _sell_window(client) is not None:
+            return True
+        if await _visible(client, "InventorySpellbookPage") is None:
+            request_focus("opening the backpack")  # B only reaches the active Mac app
+            await asyncio.sleep(1.5 if attempt else 0.5)
+            await keys_for(client).tap(VK["B"])
+            await asyncio.sleep(1.2)
+        if await _visible(client, "InventorySpellbookPage") is None:
+            await ui.click_named(client, "btnSpellbook")  # the spellbook, if B did not
+            await asyncio.sleep(1.0)
+        button = await _visible(client, "QuickSell_Item")
+        if button is not None:
+            await ui.click_center(client, button)
+            await asyncio.sleep(1.5)
+    return await _sell_window(client) is not None
+
+
+async def _sell_view(client, view: str, remaining: Counter[str], gear: int) -> int:
+    """Sell from one view (gear, housing, jewels). Returns how many sales went through."""
+    from . import ui
+
+    window = await _sell_window(client)
+    if window is None:
+        return 0
+    switch = await _visible(client, f"NextCategory_{view}")
+    if switch is not None and view != VIEWS[0]:
+        await ui.click_center(client, switch)
+        await asyncio.sleep(0.8)
+    elif view != VIEWS[0]:
+        return 0  # no way to that view; gear is what fills the bag
+    sales = 0
+    for _ in range(MAX_SALES):
+        if await _fighting(client):
+            return sales
+        window = await _sell_window(client)
+        if window is None:
+            return sales
+        await _first_page(client, window)
+        page = await _page_rows(window)
+        labels = [label for label, _item, _box in page]
+        if page and not any(labels):
+            if view != VIEWS[0] or sales:
+                return sales
+            return await _select_all(client, window, gear)
+        ticked = 0
+        for _page in range(MAX_PAGES):
+            picks = pick_rows([label for label, _i, _b in page], remaining)
+            for row in picks:
+                if await _tick(client, page[row][1], page[row][2]):
+                    ticked += 1
+            if ticked or not await _next_page(client, window):
+                break
+            page = await _page_rows(window)
+        if not ticked:
+            return sales
+        if not await _sell_selected(client, window, ticked, by_name=True):
+            return sales
+        sales += 1
+    return sales
+
+
+async def _select_all(client, window, gear: int) -> int:
+    """The rows have no readable names: Select All, only if every row must be new."""
+    from . import ui
+
+    rows = 0
+    for _ in range(MAX_PAGES):
+        rows += len(await _page_rows(window))
+        if not await _next_page(client, window):
+            break
+    if not select_all_is_safe(rows, gear):
+        logger.warning(
+            f"sell: the Quick Sell list shows no item names and holds {rows} row(s), but only {gear} "
+            "piece(s) of gear dropped this run. Lock the gear you keep (backpack, Lock) and it can "
+            "sell the rest; nothing was sold."
+        )
+        blackbox.event("quick_sell_refused", rows=rows, gear=gear)
+        return 0
+    button = await _visible_in(window, "AllAction")
+    if button is None:
+        return 0
+    await ui.click_center(client, button)
+    await asyncio.sleep(0.6)
+    return 1 if await _sell_selected(client, window, rows, by_name=False) else 0
+
+
+async def _sell_selected(client, window, ticked: int, *, by_name: bool) -> bool:
+    """Press Sell, check the game's summary, press Sell on it, wait it out."""
+    from . import ui
+
+    button = await _visible_in(window, "sellAction")
+    if button is None:
+        logger.info("sell: no Sell button in Quick Sell")
+        return False
+    await ui.click_center(client, button)
+    confirm = None
+    for _ in range(12):
+        await asyncio.sleep(0.4)
+        confirm = await _visible(client, "QuickSellConfirmationWindow")
+        if confirm is not None:
+            break
+    if confirm is None:
+        logger.info("sell: the Quick Sell summary did not open")
+        return False
+    total = count_text(await _text_in(confirm, "TotalNumber"))
+    pets = count_text(await _text_in(confirm, "PetNumber"))
+    if not confirmation_ok(total, pets, ticked, by_name=by_name):
+        logger.warning(f"sell: the summary says {total} item(s), {pets} pet(s); {ticked} ticked; not selling")
+        blackbox.event("quick_sell_cancelled", total=total, pets=pets, ticked=ticked)
+        close = await _visible_in(confirm, "QuickSellConfirmationCloseButton")
+        if close is not None:
+            await ui.click_center(client, close)
+        return False
+    sell = await _visible_in(confirm, "SellButton")
+    if sell is None:
+        return False
+    await ui.click_center(client, sell)
+    blackbox.event("quick_sold", total=total, ticked=ticked)
+    logger.info(f"sell: sold {total if total is not None else ticked} item(s)")
+    for _ in range(40):
+        await asyncio.sleep(0.5)
+        if await _visible(client, "QuickSellWaitingWindow") is None:
+            break
+    await asyncio.sleep(0.5)
+    await ui.confirm_modal(client)
+    return True
+
+
+async def _page_rows(window) -> list[tuple[str, object, object]]:
+    """(name, row, Selected box) for each visible row on this page."""
+    from . import ui
+
+    names = {f"shoplist{i}" for i in range(ROWS)} | {f"num{i}" for i in range(ROWS)}
+    found = await ui.find_named(window, names)
+    rows = []
+    for i in range(ROWS):
+        item = found.get(f"shoplist{i}")
+        if item is None or not await ui.window_visible(item):
+            continue
+        box = None
+        num = found.get(f"num{i}")
+        if num is not None:
+            box = (await ui.find_named(num, {"Selected"}, max_depth=2)).get("Selected")
+        rows.append((await _row_label(item), item, box))
+    return rows
+
+
+async def _row_label(item) -> str:
+    """The row's caption: its own text, its tooltip, or a child's text."""
+    from . import ui
+
+    text = await ui.window_text(item)
+    if text:
+        return text
+    try:
+        tip = ui._TAGS.sub("", await item.tip() or "").strip()
+        if tip and not tip.startswith("string;"):
+            return tip
     except Exception:
         pass
-    return found
+    try:
+        for child in await item.children():
+            text = await ui.window_text(child)
+            if text:
+                return text
+    except Exception:
+        pass
+    return ""
 
 
-async def _click_loot(client, wanted: Counter[str]) -> int:
-    remaining = Counter({norm_name(name): count for name, count in wanted.items()})
-    allowed = {key for key, count in remaining.items() if count > 0}
-    clicked = 0
-    for window, _name, text in await _rows(client):
-        key = norm_name(text)
-        if remaining.get(key, 0) <= 0 or not click_is_one_item(text, allowed):
+async def _tick(client, item, box) -> bool:
+    from . import ui
+
+    for target in (box, item):
+        if target is None:
             continue
         try:
-            await client.mouse_handler.click_window(window)
-        except Exception:
-            continue
-        remaining[key] -= 1
-        clicked += 1
-        await asyncio.sleep(0.25)
-    return clicked
-
-
-async def _click_sell(client) -> bool:
-    for window, name, text in await _rows(client):
-        if not is_sell_button(name, text):
-            continue
-        try:
-            await client.mouse_handler.click_window(window)
-            return True
+            await ui.click_center(client, target)
+            await asyncio.sleep(0.25)
+            if box is None or await box.maybe_checked():
+                return True
         except Exception:
             continue
     return False
+
+
+async def _first_page(client, window) -> None:
+    from . import ui
+
+    for _ in range(MAX_PAGES):
+        before = await _text_in(window, "labelScrollPage")
+        left = await _visible_in(window, "leftscroll")
+        if left is None or not before or before.split("/")[0].strip() in ("", "1"):
+            return
+        await ui.click_center(client, left)
+        await asyncio.sleep(0.4)
+        if await _text_in(window, "labelScrollPage") == before:
+            return
+
+
+async def _next_page(client, window) -> bool:
+    """Turn the page. False on the last one, or when the page number cannot be read."""
+    from . import ui
+
+    before = await _text_in(window, "labelScrollPage")
+    right = await _visible_in(window, "rightscroll")
+    if not before or right is None:
+        return False
+    await ui.click_center(client, right)
+    await asyncio.sleep(0.5)
+    return (await _text_in(window, "labelScrollPage")) != before
+
+
+async def _sell_window(client):
+    """The Quick Sell list (SellQuickSell.gui's buyWindow with a sellAction)."""
+    from . import ui
+
+    try:
+        for window in await client.root_window.get_windows_with_name("buyWindow"):
+            if await ui.window_visible(window) and (await ui.find_named(window, {"sellAction"}, max_depth=2)):
+                return window
+    except Exception:
+        pass
+    return None
+
+
+async def _visible(client, name: str):
+    from . import ui
+
+    return await ui._visible_named(client.root_window, name)
+
+
+async def _visible_in(window, name: str):
+    from . import ui
+
+    try:
+        for found in await window.get_windows_with_name(name):
+            if await ui.window_visible(found):
+                return found
+    except Exception:
+        pass
+    return None
+
+
+async def _text_in(window, name: str) -> str:
+    from . import ui
+
+    found = await _visible_in(window, name)
+    return await ui.window_text(found)
+
+
+async def _fighting(client) -> bool:
+    try:
+        return bool(await client.in_battle())
+    except Exception:
+        return False
 
 
 async def _sale_was_safe(client, book: LootBook, equipped_before: set[int], potatoes: int, gold) -> bool:
@@ -395,48 +626,36 @@ async def _gold(client) -> int | None:
         return None
 
 
-async def _close_shop(client) -> None:
+async def _close(client) -> None:
+    """Close the sell list and the backpack."""
     from . import ui
+    from .walk import VK, keys_for
 
     try:
+        window = await _sell_window(client)
+        if window is not None:
+            exit_button = await _visible_in(window, "exit")
+            if exit_button is not None:
+                await ui.click_center(client, exit_button)
+                await asyncio.sleep(0.4)
         await ui.close_menus(client)
+        await asyncio.sleep(0.4)
+        if await _visible(client, "InventorySpellbookPage") is not None:
+            await keys_for(client).tap(VK["B"])
     except Exception:
         pass
 
 
-async def _dump_shop(client) -> None:
+async def _dump(client, filename: str) -> None:
     from pathlib import Path
 
     from . import ui
 
     try:
-        lines = await ui.dump_tree(client.root_window, max_depth=7)
-        path = (blackbox.folder() or Path("state")) / "bazaar_window.txt"
+        lines = await ui.dump_tree(client.root_window, max_depth=9, with_types=True)
+        path = (blackbox.folder() or Path("state")) / filename
         path.parent.mkdir(exist_ok=True)
         path.write_text("\n".join(lines), encoding="utf-8")
-        logger.info("sell: wrote the shop windows to state/bazaar_window.txt")
+        logger.info(f"sell: wrote the windows to {path}")
     except Exception as exc:
-        logger.info(f"seeds: could not write the shop windows ({exc})")
-
-
-async def sell_trip(client, controller, book: LootBook, home_zone: str) -> bool:
-    """Mark, walk to the Bazaar, sell, Recall back. True when the bag has room again."""
-    from .navigate import trip
-    from .seeds import bag_is_full
-
-    blackbox.event("sell_trip")
-
-    async def errand() -> None:
-        await sell_here(client, controller, book)
-
-    went = await trip(
-        client, BAZAAR, home_zone, errand, controller=controller, on_fight=getattr(client, "_on_fight", None)
-    )
-    if not went:
-        logger.info("sell: could not walk to the Bazaar")
-        return False
-    try:
-        used, capacity = await client.backpack_space()
-    except Exception:
-        return False
-    return not bag_is_full(int(used), int(capacity))
+        logger.info(f"sell: could not write the windows ({exc})")

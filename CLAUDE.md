@@ -32,10 +32,10 @@ Do not force-kill Python. A `pgrep -f` whose pattern also appears in the
 bash command matches itself. Reading files in the game folder is fine.
 
 Start: Wizard101 logged in, wizard standing in the world anywhere, then
-`./mac/run.sh pet` or `./mac/run.sh seeds`. Each walks to its place first
+`./mac/run.sh pet`, `./mac/run.sh seeds` or `./mac/run.sh gather`. Each walks to its place first
 (the Pet Pavilion; Savarstaad Pass, then Boar Camp), world door included. A bare `./mac/run.sh`
 loads gitignored `config.yaml` (local file is `mode: seeds`). `chores` and
-`reagents` are refused on the Mac. Stop from the menu-bar Wiz item,
+`reagents` are refused on the Mac (`gather` is the on-foot reagent farm). Stop from the menu-bar Wiz item,
 `Stop Wizard Bot.command`, Ctrl+C in that terminal, Ctrl+Shift+Q, or
 `state/stop.request`. A second `./mac/run.sh` while one bot runs is refused.
 A running process does not pick up edits.
@@ -82,9 +82,43 @@ How the code enforces it:
   VirtualQueryEx and refuses writes to executable image pages
   (`CodeWriteBlocked`). Bot-allocated RWX buffers are data and pass.
 - `client.teleport` raises `TeleportDisabled` on the Mac.
+- Experimental, opt in (`safety.data_jumps: true`, the player asked to test
+  it supervised on 10-12): `jump.PositionHook` is WizWalker's movement hook
+  without the per-jump patches or collision NOPs. It goes in at connect
+  (recorded and adopted like the rest; `cave_size` 128). A jump
+  (`client._jump`, `jump.Jumper`) writes only the bot's 21-byte helper
+  (x, y, z, flag, our object) and taps W; the game's own set-position call
+  takes it. `navigate.walk_in_zone` jumps to goals over `JUMP_MIN` (1500)
+  away, then walks the rest. Never beside a creature (700). A first jump
+  that does not land (hook never ran, or the server put the wizard back)
+  turns jumps off for the run.
+  Live 10-12 22:44 (run 20261012-224418-gather): it works. 21 jumps landed
+  (up to 43k units, the server kept every one), then the game closed with no
+  dump and nothing in its log on a jump fired 0.1s after the previous
+  landing, the 4th in such a chain. Suspected cause, unproven: moving again
+  before the last landing had settled. Now paced (`jump.quiet_after`: 3s +1s
+  per 4000 units, max 7s; no loading screen; the wizard still for 0.6s);
+  `jump_start` logs `gap` since the last landing.
+  Jump first (10-12 23:53: one wedged-wizard miss turned jumps off and the
+  run walked into 14 timeouts): `walk_in_zone` jumps any walk longer than
+  `JUMP_MIN` (1000, measured on the graph) and jumps out of any stuck or
+  timed-out leg; the landing is the goal, or the nearest graph point within
+  1500 with no creature within 700 (`landing_spot`). Arming taps W, S, A, D
+  (the hooked call only runs when the wizard moves). Jumps go off for the
+  run only after `MAX_MISSES` (3) misses in a row.
+  Gather-only pilot (player, 10-12 night): `bot.jumps_on` = data_jumps and
+  mode in `JUMP_MODES` ("gather"); seeds and pet never install the jump hook
+  and walk. In gather with jumps, `Gatherer.pilot_step`: one zone (the
+  wizard's, if it lists spots), `jump_tour` jumps to each spot or a clear
+  graph point beside it and onto each reagent (X), no walking in the zone,
+  then `wait_for_respawn` (`gather.respawn_minutes`, 4); jumps going off
+  stops the run (it does not fall back to walking). Pacing 5-10s. Each run
+  began with ~40s where taps moved nothing though focus said yes; a jump now
+  first proves a tap moves the wizard (`keys_reach_game`, asking for focus,
+  up to 90s), and taps that move nothing are not counted as misses.
 - Walking (`walk.py`) writes yaw (heap data) and posts W/A/D with real
   scan-code lParams, re-aims every 0.3s, does a measured final approach,
-  sidesteps when stalled, and reports reached/fight/interrupted/stuck/lost/timeout.
+  backs up (S), turns (A/D) and walks on when stalled (the game has no strafe key: Q is the quest list, E the emote wheel, per Bin/config.xml), and reports reached/fight/interrupted/stuck/lost/timeout.
 
 ## Travel on foot
 
@@ -102,6 +136,17 @@ How the code enforces it:
   answers a click on the X prompt, not the key); world door = found live by
   object name (`travel.DOOR_NEEDLES`), spot saved to `state/world_doors.json`,
   walked to, prompt clicked, Spiral Map picked (a server zone change);
+- A stuck leg is remembered for an hour (`navigate._trouble`): graph edges
+  within 250 of that spot are avoided on every later walk in the zone, and
+  the wizard first walks back to the last waypoint it reached. On 10-12 the
+  Boar Camp -> Northguard gate route wedged at GH_Hero (-20147, 11978) on 8
+  trips (96 stuck legs); the replan blocked a non-edge (straightened legs
+  span several edges) and the "sidesteps" were A/D turns, so it never left.
+- Go Home only when the start zone has no route at all. A route whose gate
+  failed is a travel failure (the caller retries later): on 10-12 01:51 no
+  key reached the game (every walk moved 0, focus said ok), the gate
+  "failed", Go Home landed in the house (no nav graph) and it stuck there.
+  A trip that never moved says so ("keys are not reaching Wizard101").
 - a fight on the way is played (`client._on_fight`), then travel goes on.
   Failures dump `entities-<zone>.txt` and `spiral_door_windows.txt` into the
   run folder.
@@ -122,8 +167,18 @@ data file; it is found live the first time.
 ## What each mode does
 
 `mode: pet` (`petdance.pet_loop`): walk to the Pet Pavilion if elsewhere,
-walk onto the sigil, dance while the globe can pay, feed the first snack
-after each win, wait 5 min between energy checks. Waits out a duel. A
+walk onto the sigil, dance while the globe can pay on the stage `pet.stage`
+picks (`petplan.pick_stage`). Stages are equal in difficulty and each trains
+stats besides XP (player, 10-11): Wizard City +4 agility, Krokotopia +1 str
++3 agi, Marleybone +1 int +3 agi, MooShu +1 int +2 agi +1 will, Dragonspyre
++2 agi +2 int. "lowest" weighs each stage by how far its stats sit below
+their caps, read from the stage window's stat block ("Strength: 120/255",
+saved as `trained` in state/pet.json); unread, it rotates, and the window
+tree goes to `pet_tracks_window.txt` once a run. Then feed the first snack
+after each win, wait 5 min between energy checks. A duel is fled
+(`client._on_fight`; played only if Flee fails twice). Its `send_key`/`goto`
+hold W/A/S/D through walk.Keys (SendInput); X at the sigil falls back to a
+SendInput X when the posted one opens nothing. A
 failed walk is retried every 2 min and posts a Mac notification.
 
 `mode: seeds` (`seeds.SeedFarm`): walk to Savarstaad Pass if elsewhere;
@@ -133,24 +188,62 @@ within `seeds.leash` of home. Each round: Empower, then Scarecrow; pass
 while the next is not ready; a death drain only under ~60% health when
 that next card cannot be cast. Sacrifice is not a heal. Deathblade is not
 cast. Low health or mana: potion, wisp in reach, then stand still up to
-`seeds.rest_minutes`. Bag two slots from full: clean stop. Outside the
-pass (a defeat): walk back. No Northguard rest, no Bazaar.
+`seeds.rest_minutes`. Outside the pass (a defeat): walk back.
 
 Updated after the 10-10 live runs (these supersede the line above):
 - Low health/mana with no potion and no wisp in reach: Mark Location at
-  the camp (HUD `MarkButton`), walk to Northguard, walk onto wisps or stand
-  up to `seeds.rest_minutes`, then Recall (`RecallButton`; button names
+  the camp (HUD `MarkButton`), walk to Northguard, walk onto wisps (each
+  again after 20s, they respawn fast) until the globe is full
+  (`seeds.northguard_full` 0.98), then top up the other one, all within
+  `seeds.northguard_minutes` (10), then Recall (`RecallButton`; button names
   from Root.wad GUI/HUDWindow.gui), else walk back (`seeds.northguard_trips`).
-- Bag two slots from full: `selling.sell_trip` marks, walks to the Bazaar,
-  sells only names new this run (LootBook baseline read when home is set),
-  recalls back (`seeds.sell`). Stops only if that fails. Shop clicks are
-  still unverified live; failures dump `bazaar_window.txt` and entities.
+  Until 10-12 night it left at the camp's "ready" mark (55% mana): a trip
+  every ~6 min with 120 max mana.
+- Bag two slots from full: `selling.quick_sell` in place, no travel (the
+  Bazaar trip died at the Northguard world door on 10-11 04:41 with the game
+  unfocused). B opens the backpack (`InventorySpellbookPage`), its
+  `QuickSell_Item` opens SellQuickSell.gui's `buyWindow`: rows `shoplist0-9`
+  with `num0-9/Selected` boxes, `leftscroll`/`rightscroll`,
+  `labelScrollPage`, `sellAction`, `AllAction`; then
+  `QuickSellConfirmationWindow` (`TotalNumber`, `PetNumber`, `SellButton`)
+  and `QuickSellWaitingWindow` (names from `_Shared-WorldData.wad` GUI
+  files). Ticks only names new this run (LootBook); Select All only when the
+  rows have no names and number no more than this run's new gear. Unverified
+  live: whether rows carry a readable name. The first open writes
+  `quick_sell_window.txt` to the run folder.
+- The couch potato count now reads the bag (every 5 fights); before 10-11 it
+  read a state file only the drops hook updated, so it said 0 all night.
 - Fights: `farm.plan_round` — drain when hurt and Scarecrow can't go;
   Empower once per fight whenever castable; Scarecrow when castable;
   Scarecrow not in hand → discard everything but Empower (unused),
   drains, treasure and item cards, then pass. Self-target falls back to
   the combatant frame when its Health child is missing.
-- Travel duels: Flee (its confirm box is clicked even though
+- Defeats (10-11 afternoon, ~15 of them): mana ran dry mid-fight, Scarecrow
+  showed "not castable" for 10+ rounds while the bot passed, the boars won,
+  and the wizard woke in Northguard and walked straight back. client.stats
+  never once reported low mana or health in any run (no `recover` event
+  ever fired), so the out-of-fight checks never ran. Now each round reads
+  the wizard's own combatant (`farm._own_vitals`: health, mana, pips) and
+  logs it on the cast/pass line; `farm.flee_reason` flees when Scarecrow is
+  held but dead and mana < 7 (or pips ≥ 7 two rounds running, or 7 rounds
+  with nothing read), or health < 30% with nothing castable to heal.
+  `seeds` then owes that need (or both, on waking in Northguard within 90s
+  of a fight) and refills it before the next pull; an owed need counts an
+  unread globe as empty, and stats that call it full right after the duel
+  ran dry are dropped for the run (`stats_untrusted`).
+  Live 10-11 20:00: the combatant read works (health 2744/2744, mana
+  6/120: max mana is only 120, ~8 fights); the flee worked, and a fled
+  Savarstaad duel lands in Northguard (so that is not a defeat: `last_fled`);
+  client.stats read `?` all run. Out of a fight `seeds.ratios` now falls
+  back to the HUD globe texts (`textHealth`/`textMana`, HUDWindow.gui) over
+  the maxima last read in a duel (`farm.last_vitals`).
+  Overnight 10-12 (run 20261012-022316, 357 fights, 0 defeats): the HUD read
+  works (recover at ~25% mana, Northguard mana wisps refill to ~70% in
+  ~30s, ~45 trips). At 10:19 bot time a flee's loading screen never ended;
+  the bot waited 2 h ("in a dialogue or a loading screen"). Now a wait over
+  `STUCK_BUSY` (5 min) logs a warning and a `needs_player` notification.
+  bot.log times run 1 h ahead of the Mac clock.
+- Travel duels: `farm.flee` (its confirm box is clicked even though
   `ui.confirm_modal` refuses flee boxes), fight only if two flees fail.
 - Pulls walk to 15 units (into the creature); a walk that ended >150 away
   waits 1s for a duel, not 14s.
@@ -170,6 +263,28 @@ Live findings (10-10):
 A fight counts when the duel phase says so, or when a hand `SpellCheckBox`,
 `CombatantControl`, or `DoneWindow` is visible (the phase lagged ~11s after
 contact on 10-06). The wait after contact is 14s.
+
+`mode: gather` (`gather.Gatherer`, `./mac/run.sh gather`): farm
+`gather.reagent` (Black Lotus by default) on foot. Spawn spots come from the
+zone files (`reagent_spots.py`): `pathData.xml` "Path-<Reagent>" lists
+path-node ids, `pathNodeData.bin` gives each node's x, y, z; the server
+fills some of those at random. `python3 -m wiz101_auto.reagent_spots
+[World] [Reagent]` lists them offline (MooShu Black Lotus: Shirataki Temple
+15, Kishibe Village 16, Cave of Solitude 16, Tree of Life 20, Tatakai
+Outpost 15, Ancient Burial Grounds 13, Village of Sorrow 12, Crimson Fields
+9, Jade Palace 1). Zones are ranked by spots per minute of walking, the best
+zone's own area first (default: Shirataki, Kishibe, Cave of Solitude, all
+off Shoshun Village). Each zone: a nearest-first tour of its spots; routes
+keep 800 from loaded creatures (`navigate` `avoid`; a creature within 500 of the next leg replans before it is walked); the tour follows walking distance on the zone graph; a spot with a creature
+on it waits until later in the tour; any loaded reagent within 2500 is
+walked onto and X'd (gone afterwards = picked). Duels: `_on_fight` (flee,
+play if two flees fail). Sightings and picks per spot go to
+`state/gather.json`, to learn which spots really spawn. Unverified live:
+the reagent entity's object name (matched loosely: "blacklotus" in it, not
+"spawn"/"path"), the X pickup, the Shirataki "dungeon" X door and its
+"dungeonExitConfirm" way out (walked, then the box confirmed), and whether
+Shirataki is an instance whose reagents re-roll on each entry. No realm
+hopping yet.
 
 `chores`/`reagents` (`dayplan`, `duty`, `farm` pulls and camps) are the
 Windows day plan; their pulls and camp jumps still teleport, so they stay

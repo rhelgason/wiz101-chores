@@ -1,18 +1,29 @@
 # Every option. The rules are PLAYBOOK.md.
-# On the Mac only `pet` and `seeds` run: the other modes travel by teleport,
-# and teleports closed the Wine client.
-mode: seeds                  # pet | seeds   (Windows also: chores | reagents)
+# On the Mac only `pet`, `seeds` and `gather` run: the other modes travel by
+# teleport, and teleports closed the Wine client.
+mode: seeds                  # pet | seeds | gather   (Windows also: chores | reagents)
 log_file: wiz101-auto.log    # each run also writes logs/runs/<time>-<mode>/
 
 pet:
   auto: true                 # chores dances while energy can pay, then farms
   feed: true                 # feed the first snack after each win
+  stage: lowest              # lowest | rotate | random | Wizard City | Krokotopia | Marleybone | MooShu | Dragonspyre
   default_goal: adult        # baby, teen, adult, ancient, epic, mega, ultra
   goals: {}                  # override default_goal for one pet kind
 
 seeds:
   leash: 4500                # only creatures this close to where the run started (Boar Camp)
   rest_minutes: 4            # stand still this long for health or mana, then fight anyway
+  northguard_trips: true     # out of mana with no wisp near: Mark, Northguard wisps, Recall
+  northguard_full: 0.98      # a Northguard trip fills the globe this far (then tops up the other)
+  northguard_minutes: 10     # ... or stays this long at most
+  sell: true                 # bag nearly full: Quick Sell this run's loot from the backpack
+
+gather:
+  reagent: Black Lotus       # any reagent the zone files list a "Path-<Name>" for (python3 -m wiz101_auto.reagent_spots)
+  world: ""                  # empty: the reagent's usual world (Black Lotus: MooShu)
+  zones: []                  # e.g. [Shirataki Temple, Kishibe Village]; empty: the best few by spots per walk
+  zone_count: 3              # how many of the best zones to tour in turn
 
 reagents:
   enabled: true              # follow a tracked collect quest; not an all-day sweep
@@ -24,3 +35,4 @@ safety:
   max_hours: 0
   mouseless: true
   pause_releases_mouse: false  # true: a pause takes the mouse hook out (two more code writes each time)
+  data_jumps: false          # experimental: one more hook at connect, then far walks jump by data writes only (jump.py)

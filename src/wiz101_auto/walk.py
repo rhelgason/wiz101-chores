@@ -25,8 +25,14 @@ from loguru import logger
 from . import blackbox
 
 WM_KEYDOWN, WM_KEYUP = 0x100, 0x101
-VK = {"W": 0x57, "A": 0x41, "S": 0x53, "D": 0x44, "X": 0x58}
-SCAN = {0x57: 0x11, 0x41: 0x1E, 0x53: 0x1F, 0x44: 0x20, 0x58: 0x2D}  # US set 1, if MapVirtualKey fails
+VK = {"W": 0x57, "A": 0x41, "S": 0x53, "D": 0x44, "X": 0x58, "B": 0x42}
+# US set 1 scan codes, if MapVirtualKey fails
+SCAN = {0x57: 0x11, 0x41: 0x1E, 0x53: 0x1F, 0x44: 0x20, 0x58: 0x2D, 0x42: 0x30}
+# Getting unstuck. The game has no strafe key: A and D turn, Q is the quest
+# list and E the emote wheel (Bin/config.xml; 10-12 the Q "strafes" opened the
+# quest book). So each stall backs up (S), turns (A or D, alternating), and
+# walks on (W) a little longer each time, then the aim comes back to the target.
+UNSTICK = ((0.4, "A", 0.3, 0.6), (0.4, "D", 0.3, 0.8), (0.7, "A", 0.45, 1.1))
 BASE_SPEED = 580.0  # WizWalker's WIZARD_SPEED, units per second at +0%
 REPEAT = 0.05  # key repeat while held
 AIM_EVERY = 0.3
@@ -396,12 +402,14 @@ async def walk_to(
                     if stalls >= 4:
                         outcome = "stuck"
                         break
-                    # Around whatever is in the way: a sidestep, alternating.
+                    # Around whatever is in the way: back up, then strafe, alternating.
                     keys.release(w)
-                    sidestep = VK["A"] if side % 2 == 0 else VK["D"]
+                    back, turn, turning, forward = UNSTICK[side % len(UNSTICK)]
                     side += 1
-                    blackbox.event("walk_sidestep", why=why, at=_r(here), key=chr(sidestep))
-                    await keys.hold(sidestep, 0.45)
+                    blackbox.event("walk_sidestep", why=why, at=_r(here), key=turn)
+                    await keys.hold(VK["S"], back)
+                    await keys.hold(VK[turn], turning)
+                    await keys.hold(w, forward)
                 else:
                     stalls = 0
     finally:

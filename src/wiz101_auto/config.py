@@ -8,7 +8,7 @@ from typing import Any
 
 import yaml
 
-MODES = ("chores", "pet", "reagents", "seeds")  # chores is the day plan in PLAYBOOK.md
+MODES = ("chores", "pet", "reagents", "seeds", "gather")  # chores is the day plan in PLAYBOOK.md
 
 
 @dataclass
@@ -20,6 +20,9 @@ class SafetyConfig:
     # Paused, take the mouse hook out so the player can click. Each pause is
     # then two more writes to game code; off, a pause only holds the bot.
     pause_releases_mouse: bool = False
+    # Experimental: jump the wizard with data writes only (jump.py). One more
+    # hook goes in at connect; no game code is written after it. Off: walk.
+    data_jumps: bool = False
 
 
 @dataclass
@@ -32,6 +35,10 @@ class PetConfig:
     goals: dict = field(default_factory=dict)
     default_goal: str = "adult"
     feed: bool = True  # feed the first snack offered after each win
+    # Dance stage: "lowest" (the stage that trains the stats furthest below
+    # their caps; rotates until the stat block is read), "rotate", "random",
+    # or a stage name ("Wizard City", "Krokotopia", ...).
+    stage: str = "lowest"
 
 
 @dataclass
@@ -52,7 +59,24 @@ class SeedsConfig:
     leash: float = 4500.0
     rest_minutes: float = 4.0  # stand still this long for health or mana before fighting anyway
     northguard_trips: bool = True  # low and nothing nearby: Mark, walk to Northguard for wisps, Recall
-    sell: bool = True  # bag nearly full: Mark, walk to the Bazaar, sell this run's loot, Recall
+    northguard_full: float = 0.98  # a trip fills the globe this far (then tops up the other one)
+    northguard_minutes: float = 10.0  # ... or stays this long at most
+    sell: bool = True  # bag nearly full: backpack Quick Sell of this run's loot, in place
+
+
+@dataclass
+class GatherConfig:
+    """`mode: gather`: walk a reagent's spawn spots (read from the zone files),
+    pick up what has spawned, keep away from creatures, flee any duel."""
+
+    reagent: str = "Black Lotus"
+    world: str = ""  # empty: the reagent's usual world (gather.REAGENT_WORLDS)
+    zones: list[str] = field(default_factory=list)  # display names or zone paths; empty: the best few
+    zone_count: int = 3  # how many of the best zones to tour in turn
+    # With safety.data_jumps (the pilot): jump only, never walk, in one zone
+    # (the one the wizard is in, if it lists spots; else the best). Rounds wait
+    # this long between them for respawns.
+    respawn_minutes: float = 4.0
 
 
 @dataclass
@@ -63,6 +87,7 @@ class Config:
     pet: PetConfig = field(default_factory=PetConfig)
     reagents: ReagentConfig = field(default_factory=ReagentConfig)
     seeds: SeedsConfig = field(default_factory=SeedsConfig)
+    gather: GatherConfig = field(default_factory=GatherConfig)
 
 
 def _merge(obj: Any, data: dict[str, Any], path: str = "") -> Any:
@@ -100,6 +125,15 @@ def load_config(path: str | Path | None) -> Config:
         raise ValueError(f"mode must be one of {', '.join(MODES)}, not {cfg.mode!r}")
     if cfg.reagents.hop_zones < 0:
         raise ValueError("reagents.hop_zones must be 0 or more")
+    from .petplan import DANCE_STAGES, STAGE_CHOICES
+
+    stages = [*STAGE_CHOICES, *(name.lower() for name, _gains in DANCE_STAGES)]
+    if cfg.pet.stage.strip().lower() not in stages:
+        raise ValueError(f"pet.stage must be one of {', '.join(stages)}, not {cfg.pet.stage!r}")
+    if not cfg.gather.reagent.strip():
+        raise ValueError("gather.reagent must name a reagent")
+    if cfg.gather.zone_count < 1:
+        raise ValueError("gather.zone_count must be 1 or more")
     if cfg.seeds.leash < 500:
         raise ValueError("seeds.leash must be at least 500")
     return cfg

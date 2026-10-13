@@ -16,6 +16,12 @@ card cannot be cast, the round casts a death drain on an enemy first (Ghoul,
 Wraith, Vampire, Skeletal Dragon, or a card that steals health). Sacrifice
 is not used. A defeat, or health that is already low, takes a potion or a
 health wisp and returns. Nothing here stops the session.
+
+Savarstaad flees instead of passing toward a defeat: when Scarecrow is in
+hand and cannot be cast for want of mana (read from the wizard's own
+combatant, or Scarecrow still dead with seven pips up, or for many rounds
+when neither reads), and when health is low with nothing to heal it. On
+10-11 the wizard ran dry, passed for ten rounds, and lost, about 15 times.
 """
 
 from __future__ import annotations
@@ -104,6 +110,12 @@ _last_step = ""
 ROUNDS = 30
 HEAL_BELOW = 0.60  # cast a death drain while health is under this
 PULL_BELOW = 0.35  # gather health before starting another fight
+FLEE_BELOW = 0.30  # in a fight with nothing castable to heal: flee
+SCARECROW_PIPS = 7  # its pip cost, and so its mana cost
+DRY_WITH_PIPS = 2  # rounds Scarecrow stayed uncastable with its pips up (one may be a stun)
+DRY_BLIND = 7  # rounds, when neither mana nor pips read
+FLEE_WAIT = 25.0  # a flee takes effect when the round resolves
+last_vitals: dict = {}  # the wizard's own combatant, last read in a duel (gives the globes' maxima)
 # Death drains. Cast on an enemy; the caster is the one who is healed.
 DRAIN_NAMES = ("ghoul", "wraith", "vampire", "skeletal dragon")
 DRAIN_EFFECTS = {"steal_health", "steal_over_time"}
@@ -297,6 +309,52 @@ def best_mob(labels: list[tuple[str, float]], groups: tuple[tuple[str, ...], ...
 
 def needs_heal(ratio: float | None) -> bool:
     return ratio is not None and ratio < HEAL_BELOW
+
+
+def pips_up(vitals: dict) -> int | None:
+    """Pips a spell can use: a power pip counts two."""
+    normal, power = vitals.get("pips"), vitals.get("power_pips")
+    if normal is None and power is None:
+        return None
+    return int(normal or 0) + 2 * int(power or 0)
+
+
+def flee_reason(hand: list[dict], vitals: dict, dry_rounds: int) -> str:
+    """'mana' or 'health' when passing on can only end in a defeat; else ''.
+
+    `dry_rounds` counts the planning rounds in a row in which Scarecrow was
+    in hand and not castable, this one included.
+    """
+    health, top = vitals.get("health"), vitals.get("max_health")
+    can_heal = any(c.get("castable") and (c.get("drain") or c.get("spell") == "scarecrow") for c in hand)
+    if health is not None and top and health / top < FLEE_BELOW and not can_heal:
+        return "health"
+    if dry_rounds <= 0:
+        return ""
+    mana = vitals.get("mana")
+    if mana is not None and vitals.get("max_mana"):
+        return "mana" if mana < SCARECROW_PIPS else ""
+    pips = pips_up(vitals)
+    if pips is not None:
+        return "mana" if pips >= SCARECROW_PIPS and dry_rounds >= DRY_WITH_PIPS else ""
+    return "mana" if dry_rounds >= DRY_BLIND else ""
+
+
+def scarecrow_dry(hand: list[dict]) -> bool:
+    """Scarecrow is in hand and none of it can be cast."""
+    held = [c for c in hand if c.get("spell") == "scarecrow"]
+    return bool(held) and not any(c.get("castable") for c in held)
+
+
+def vitals_text(vitals: dict) -> str:
+    def pair(a, b):
+        cur, top = vitals.get(a), vitals.get(b)
+        return "?" if cur is None else f"{cur}/{top if top else '?'}"
+
+    pips = vitals.get("pips")
+    power = vitals.get("power_pips")
+    pip_text = "?" if pips is None and power is None else f"{pips or 0}+{power or 0}p"
+    return f"health {pair('health', 'max_health')}, mana {pair('mana', 'max_mana')}, pips {pip_text}"
 
 
 def too_hurt_to_pull(ratio: float | None) -> bool:
@@ -631,11 +689,15 @@ async def in_fight(client) -> bool:
     return fight_visible(phase, cards, names)
 
 
-async def play_current_fight(client, controller, *, combo: bool = True) -> None:
-    """Play the duel that is already going. Does not walk or teleport."""
+async def play_current_fight(client, controller, *, combo: bool = True) -> str | None:
+    """Play the duel that is already going. Does not walk or teleport.
+
+    'mana' or 'health' when it was fled for want of that; else None.
+    """
     logger.info("farm: a fight is already going; playing it")
-    await _play(client, controller, combo=combo)
+    fled = await _play(client, controller, combo=combo)
     await _note_potato(client)
+    return fled
 
 
 async def _wait_for_fight(client, gid: int) -> bool:
@@ -1205,11 +1267,13 @@ async def _ready_to_cast(handler, phase: bool | None, cards: int) -> bool:
     return await _planning_ready(handler) is True
 
 
-async def _play(client, controller, combo: bool = False):
+async def _play(client, controller, combo: bool = False) -> str | None:
+    """Play rounds until the duel is gone. 'mana' or 'health' when it was fled for that."""
     from wizwalker.combat import AoeHandler
 
     handler = AoeHandler(client)
     done: list[str] = []
+    memo: dict = {}
     announced = False
     missing = 0
     idle = 0
@@ -1270,7 +1334,13 @@ async def _play(client, controller, combo: bool = False):
         casts += 1
         try:
             if combo:
-                await _cast_combo(handler, done, heal=needs_heal(ratio))
+                step = await _cast_combo(handler, done, heal=needs_heal(ratio), memo=memo)
+                if step.startswith("flee:"):
+                    why = step.split(":", 1)[1]
+                    if await flee(client, controller, why=f"out of {why}"):
+                        return why
+                    logger.info("farm: could not flee; playing on")
+                    await handler.pass_button()
             else:
                 await _cast_or_pass(handler, heal=needs_heal(ratio))
         except Exception as exc:
@@ -1312,6 +1382,74 @@ async def _read_hand(handler) -> list[tuple[object, dict]]:
     return out
 
 
+async def _own_vitals(handler) -> dict:
+    """The wizard's own combatant: health, mana and pips; an unread value is left out.
+
+    Read from the duel, not client.stats: on 10-11 the out-of-fight stats
+    never once reported low mana or health across ~15 defeats.
+    """
+    out: dict = {}
+    try:
+        member = await handler.get_client_member()
+    except Exception as exc:
+        if _client_closed(exc):
+            raise
+        return out
+    for key, read in (
+        ("health", "health"),
+        ("max_health", "max_health"),
+        ("mana", "mana"),
+        ("max_mana", "max_mana"),
+        ("pips", "normal_pips"),
+        ("power_pips", "power_pips"),
+    ):
+        try:
+            out[key] = int(await getattr(member, read)())
+        except Exception as exc:
+            if _client_closed(exc):
+                raise
+    # A max of zero or below the current value is a misread, not a reading.
+    for cur, top in (("health", "max_health"), ("mana", "max_mana")):
+        if out.get(top) is not None and (out[top] <= 0 or out.get(cur, 0) > out[top] or out.get(cur, 0) < 0):
+            out.pop(cur, None)
+            out.pop(top, None)
+    return out
+
+
+async def flee(client, controller=None, *, tries: int = 2, why: str = "") -> bool:
+    """Click Flee (and its confirm) on planning turns until the duel is gone."""
+    from wizwalker.combat import CombatHandler
+
+    from . import blackbox, ui
+
+    handler = CombatHandler(client)
+    for attempt in range(tries):
+        logger.info(f"farm: fleeing{f' ({why})' if why else ''} (try {attempt + 1})")
+        blackbox.event("flee", why=why, attempt=attempt + 1)
+        try:
+            if controller:
+                await controller.checkpoint()
+            await handler.flee_button()
+            await asyncio.sleep(0.6)
+            # ui.confirm_modal refuses flee boxes on purpose; this one is wanted.
+            box = await ui.modal_box(client)
+            if box is not None:
+                await ui.modal_click(client, box, "centerButton")
+        except Exception as exc:
+            if _client_closed(exc):
+                raise
+            logger.info(f"farm: no Flee button yet ({exc})")
+        end = time.monotonic() + FLEE_WAIT
+        while time.monotonic() < end:
+            if not await in_fight(client):
+                logger.info("farm: fled the duel")
+                blackbox.event("fled", why=why)
+                return True
+            await asyncio.sleep(0.5)
+    logger.info("farm: fleeing did not work")
+    return False
+
+
 async def _cast_on_self(handler, card) -> None:
     """Self-target: the member's Health text, else its whole frame (the Health
     child was missing once on 10-10 and the round was lost)."""
@@ -1322,10 +1460,29 @@ async def _cast_on_self(handler, card) -> None:
         await handler.client.mouse_handler.click_window(member._combatant_control)
 
 
-async def _cast_combo(handler, done: list[str], heal: bool = False) -> str:
-    """Empower on the wizard, then Scarecrow; dig for Scarecrow by discarding."""
+async def _cast_combo(handler, done: list[str], heal: bool = False, memo: dict | None = None) -> str:
+    """Empower on the wizard, then Scarecrow; dig for Scarecrow by discarding.
+
+    'flee:mana' or 'flee:health' instead when passing on would end in a
+    defeat (flee_reason); the caller flees. `memo` carries the dry-round count.
+    """
+    memo = {} if memo is None else memo
     hand = await _read_hand(handler)
     infos = [info for _card, info in hand]
+    vitals = await _own_vitals(handler)
+    memo["dry"] = memo.get("dry", 0) + 1 if scarecrow_dry(infos) else 0
+    memo["vitals"] = vitals
+    if vitals.get("health") is not None and vitals.get("max_health"):
+        heal = heal or needs_heal(vitals["health"] / vitals["max_health"])
+    if vitals:
+        last_vitals.clear()
+        last_vitals.update(vitals)
+    reason = flee_reason(infos, vitals, memo["dry"])
+    if reason:
+        shown = ", ".join(f"{i['name']}{'' if i['castable'] else ' (not castable)'}" for i in infos)
+        logger.warning(f"farm: out of {reason} ({vitals_text(vitals)}); hand: {shown or 'nothing'}")
+        blackbox.event("cast", spell="flee", why=reason, vitals=vitals, dry=memo["dry"])
+        return f"flee:{reason}"
     action = plan_round(infos, done, heal)
     if action[0] == "drain":
         drained = await _cast_drain(handler)
@@ -1341,8 +1498,8 @@ async def _cast_combo(handler, done: list[str], heal: bool = False) -> str:
         else:
             await _cast_on_self(handler, card)
         done.append(step)
-        logger.info(f"farm: casting {step}")
-        blackbox.event("cast", spell=step)
+        logger.info(f"farm: casting {step} ({vitals_text(vitals)})")
+        blackbox.event("cast", spell=step, vitals=vitals)
         return step
     if action[0] == "discard":
         names = [hand[i][1]["name"] for i in action[1]]
@@ -1358,12 +1515,13 @@ async def _cast_combo(handler, done: list[str], heal: bool = False) -> str:
                 break
     await handler.pass_button()
     shown = ", ".join(f"{i['name']}{'' if i['castable'] else ' (not castable)'}" for i in infos) or "nothing"
-    logger.info(f"farm: passing; hand: {shown}")
+    logger.info(f"farm: passing ({vitals_text(vitals)}); hand: {shown}")
     blackbox.event(
         "cast",
         spell="pass",
         hand=[i["name"] for i in infos],
         castable=[i["name"] for i in infos if i["castable"]],
+        vitals=vitals,
     )
     return "pass"
 

@@ -7,7 +7,7 @@ The connect order is the safety story (hooking.py has the why):
 4. the loop, with a heartbeat into events.jsonl;
 5. stop: the mouse hook comes out, the other hooks stay for the next run.
 
-On the Mac only `pet` and `seeds` run. The day plan and reagent sweeps
+On the Mac only `pet`, `seeds` and `gather` run. The day plan and reagent sweeps
 travel by teleport, and teleports are what closed this Wine client.
 """
 
@@ -35,7 +35,7 @@ CONNECT_TIMEOUT = 300.0
 SHUTDOWN_WAIT = 10.0
 PARK_TIMEOUT = 25.0
 HEARTBEAT = 10.0
-MAC_MODES = ("pet", "seeds")
+MAC_MODES = ("pet", "seeds", "gather")
 WORLD_HOOKS = ("player_struct", "player_stat_struct", "current_client", "current_render_context")
 
 
@@ -163,7 +163,7 @@ def _pick_client(handler: ClientHandler):
     return client
 
 
-async def connect(handler: ClientHandler, mode: str = "seeds"):
+async def connect(handler: ClientHandler, mode: str = "seeds", jumps: bool = False):
     from .hooking import Hooks, HookStateError
 
     client = _pick_client(handler)
@@ -175,7 +175,7 @@ async def connect(handler: ClientHandler, mode: str = "seeds"):
     blackbox.event("connect", pid=client.process_id, hwnd=client.window_handle, mode=mode)
     try:
         await asyncio.wait_for(
-            hooks.attach(dance=mode in ("pet", "chores"), teleport=teleport), HOOK_SCAN_TIMEOUT
+            hooks.attach(dance=mode in ("pet", "chores"), teleport=teleport, jump=jumps), HOOK_SCAN_TIMEOUT
         )
     except HookStateError as exc:
         blackbox.event("connect_failed", why=str(exc))
@@ -262,9 +262,6 @@ async def connect(handler: ClientHandler, mode: str = "seeds"):
     return client
 
 
-FLEE_WAIT = 25.0  # a flee takes effect when the round resolves
-
-
 def _fight_on_the_way(client, controller, *, combo: bool):
     """What travel does when a creature pulls the wizard into a duel: flee it.
 
@@ -273,33 +270,12 @@ def _fight_on_the_way(client, controller, *, combo: bool):
     """
 
     async def flee_or_play() -> None:
-        from wizwalker.combat import CombatHandler
+        from .farm import flee, play_current_fight
 
-        from . import ui
-        from .farm import in_fight, play_current_fight
-
-        handler = CombatHandler(client)
-        for attempt in range(2):
-            logger.info(f"travel: a duel on the way; fleeing (try {attempt + 1})")
-            blackbox.event("travel_flee", attempt=attempt + 1)
-            try:
-                await controller.checkpoint()
-                await handler.flee_button()
-                await asyncio.sleep(0.6)
-                # ui.confirm_modal refuses flee boxes on purpose; this one is wanted.
-                box = await ui.modal_box(client)
-                if box is not None:
-                    await ui.modal_click(client, box, "centerButton")
-            except Exception as exc:
-                if type(exc).__name__ == "ClientClosedError":
-                    raise
-                logger.info(f"travel: no Flee button yet ({exc})")
-            end = time.monotonic() + FLEE_WAIT
-            while time.monotonic() < end:
-                if not await in_fight(client):
-                    logger.info("travel: fled; carrying on")
-                    return
-                await asyncio.sleep(0.5)
+        blackbox.event("travel_flee")
+        if await flee(client, controller, why="a duel on the way"):
+            logger.info("travel: fled; carrying on")
+            return
         logger.info("travel: fleeing did not work; fighting it")
         blackbox.event("travel_fight_played")
         await play_current_fight(client, controller, combo=combo)
@@ -400,6 +376,11 @@ async def chore_loop(client, cfg: Config, controller: Controller, task: dict):
         from .seeds import seed_loop
 
         await seed_loop(client, controller, task, cfg.seeds)
+        return
+    if cfg.mode == "gather":
+        from .gather import gather_loop
+
+        await gather_loop(client, controller, task, cfg.gather)
         return
     if cfg.mode == "pet":
         from .petdance import pet_loop
@@ -519,11 +500,19 @@ async def heartbeat_loop(client, controller: Controller, task: dict):
         await asyncio.sleep(5)
 
 
+JUMP_MODES = ("gather",)  # the data-only jump pilot; seeds and pet walk (the player, 10-12)
+
+
+def jumps_on(cfg: Config) -> bool:
+    """safety.data_jumps, in a mode that pilots it. Elsewhere no jump hook goes in."""
+    return bool(cfg.safety.data_jumps) and cfg.mode in JUMP_MODES
+
+
 def _apply_mode(cfg: Config):
     if cfg.mode == "pet":
         cfg.pet.auto = True
         cfg.reagents.enabled = False
-    elif cfg.mode in ("reagents", "seeds"):
+    elif cfg.mode in ("reagents", "seeds", "gather"):
         cfg.pet.auto = False
         cfg.reagents.enabled = cfg.mode == "reagents"
 
@@ -545,6 +534,7 @@ async def run(cfg: Config):
     doing = {
         "seeds": "Savarstaad seeds until stopped (Troubled Warriors and Splithoof Barbarians), no teleports",
         "pet": "the dance game while energy can pay, waiting for energy in between",
+        "gather": f"{cfg.gather.reagent} from its spawn spots, on foot, around creatures",
     }.get(cfg.mode, "the day plan")
     logger.info(f"mode={cfg.mode}: {doing}. {s.stop_key}=stop, {s.pause_key}=pause/resume")
     blackbox.event("run_start", mode=cfg.mode, wine=wine_version() or in_wine(), pid=os.getpid())
@@ -559,7 +549,9 @@ async def run(cfg: Config):
     task = {"name": "starting"}
     try:
         try:
-            client = await asyncio.wait_for(connect(handler, cfg.mode), CONNECT_TIMEOUT)
+            client = await asyncio.wait_for(
+                connect(handler, cfg.mode, jumps=jumps_on(cfg)), CONNECT_TIMEOUT
+            )
         except TimeoutError:
             raise SystemExit(
                 "\nGetting into this open Wizard101 took too long. Leave the game open and run again."
@@ -567,6 +559,14 @@ async def run(cfg: Config):
         obey_controller(client, controller)
         client._controller = controller
         client._on_fight = _fight_on_the_way(client, controller, combo=cfg.mode == "seeds")
+        client._jump = None
+        if jumps_on(cfg) and "jump_helper" in client.hook_handler._base_addrs:
+            from .jump import Jumper
+
+            client._jump = Jumper(client)
+            logger.info("jump: data-only jumps are on (gather pilot, experimental)")
+        elif cfg.safety.data_jumps:
+            logger.info(f"jump: off in {cfg.mode} mode (jumps are a gather-only pilot); walking")
         tasks = [
             asyncio.create_task(controller.watch(), name="safety"),
             asyncio.create_task(chore_loop(client, cfg, controller, task), name="main"),
