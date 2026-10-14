@@ -4,7 +4,7 @@ A thinned Wizard101 chore bot. It hooks the official client through WizWalker.
 Read `PLAYBOOK.md` before changing what it does. If this file and the code
 disagree, the code is what ran and this file is what the next session must
 know. Working tree is **0.9.0** (teleport-free Mac rebuild, not yet run live).
-Last pushed: `8af0dac` on `origin/main`.
+Push every change to `origin/main` as it is made (player, 10-14).
 
 Private repo only: `git@github.com:rhelgason/wiz101-chores.git` (`origin`,
 fetch and push). `upstream` is `git@github.com:szatcg/wiz101-auto.git` (fetch
@@ -34,7 +34,11 @@ bash command matches itself. Reading files in the game folder is fine.
 Start: Wizard101 logged in, wizard standing in the world anywhere, then
 `./mac/run.sh pet`, `./mac/run.sh seeds` or `./mac/run.sh gather`. Each walks to its place first
 (the Pet Pavilion; Savarstaad Pass, then Boar Camp), world door included. A bare `./mac/run.sh`
-loads gitignored `config.yaml` (local file is `mode: seeds`). `chores` and
+loads gitignored `config.yaml` (local file is `mode: seeds`). Every setting
+is also a flag after the mode (`cli.add_setting_flags`, generated from the
+config dataclasses: `--seeds-leash` and `--leash`, `--no-sell`, `--hunt
+"NAME[:COUNT][@World/Zone]"`; `./mac/run.sh --help`); flags beat the file,
+which is optional (the player prefers flags, 10-13). `chores` and
 `reagents` are refused on the Mac (`gather` is the on-foot reagent farm). Stop from the menu-bar Wiz item,
 `Stop Wizard Bot.command`, Ctrl+C in that terminal, Ctrl+Shift+Q, or
 `state/stop.request`. A second `./mac/run.sh` while one bot runs is refused.
@@ -243,10 +247,56 @@ Updated after the 10-10 live runs (these supersede the line above):
   the bot waited 2 h ("in a dialogue or a loading screen"). Now a wait over
   `STUCK_BUSY` (5 min) logs a warning and a `needs_player` notification.
   bot.log times run 1 h ahead of the Mac clock.
+- 10-13 10:58: another player joined fight 67; the game's "Endorse a Wizard"
+  window (`EndorsementWindow`) came up and held the wizard still in Northguard
+  for 27 min (every walk moved 0, Recall did nothing). `ui.close_endorsement`
+  clicks its `CloseEndorsementWindowButton` after every fight and whenever a
+  walk moves nothing, before asking for focus.
 - Travel duels: `farm.flee` (its confirm box is clicked even though
   `ui.confirm_modal` refuses flee boxes), fight only if two flees fail.
 - Pulls walk to 15 units (into the creature); a walk that ended >150 away
   waits 1s for a duel, not 14s.
+
+Hunts (10-13, the player's Storm quest goals: 30 Charmed Slaves, 30 O'Leary
+Prowlers): `seeds.hunts` lists creatures to defeat in turn instead of the
+boars (`seeds.Hunt`, `hunts_from`). Each hunt pulls only that creature
+(name needle like `charmedslave`, matched on template or plate name),
+in its zone (`zone`, or `KNOWN_HUNTS`, else the zone the wizard is in at
+the start). `KNOWN_HUNTS` from a scan of the game files: Charmed Slave in
+Krokotopia/KT_Pyramid/KT_Chamber (Chamber of Fire; its map labels a
+"Chamber of the Charmed"), O'Leary Prowler in
+Marleybone/MB_ScotlandYard/MB_KnightsCourt (an "OlearyProwler" stand-in
+object); both have walk routes (navcheck). With no camp a hunt roams:
+nothing to pull for `ROAM_AFTER` 8s, it walks to the next of `roam_points`
+(one graph node per 3500 square of the wizard's graph part, nearest-next;
+42 in Chamber of Fire, 81 in Knight's Court) and pulls within the leash of
+where it stands. Refills by wisps in reach then rest
+(Northguard trips only where a hunt has a `refill` zone). The goal is only
+the command's count (player, 10-14: the Storm quest is odd, never trust its
+tracker): each duel not fled adds every enemy in it matching the hunt
+(`farm.last_foes`, read each round by owner id and name; `kills_in`); a
+defeat found afterwards takes that duel back. Then the next hunt; a next
+hunt with no known zone stops the run and asks the player to walk there.
+After the last the run stops (`needs_player`
+"done with every hunt"). `--hunt seeds` (or "boars") is the boar seed farm
+as a step (`SEED_WORDS`; until stopped unless given a count), so
+`--hunt "O'Leary Prowler:30" --hunt "Charmed Slave:30" --hunt seeds` ends on
+the boars. Unverified live.
+10-14 overnight: `self.hunt` (the current Hunt) hid the `hunt()` method; every
+step failed for 9.5 h while the wizard stood idle. The method is
+`hunt_round`; `run_steps` stops the run after `SAME_ERROR_STOP` (20) of one
+error in a row.
+Live 10-14 10:46 (run 20261014-104641-seeds): walked Wolfminster Abbey to
+Knight's Court (64s), won 2 prowler duels. It first chased
+"MB-Standin-OlearyProwler" (scenery; `mob_rank` now skips "standin"). The
+tracker never showed the goal (it is no longer read). Duel 3: one
+Scarecrow left a prowler up, discards emptied the deck, pips fell to 0,
+4 min of passing, fled at 19% health. Now after one Scarecrow a round with
+none castable casts a drain or damage card at an enemy (`_cast_attack`).
+The flee's transfer to MB_Hub hung on the loading screen (game log:
+ConnectComplete, then AppCloseConnection state 5, nothing more), like
+10-12 10:19; the game closed 8 min later with no dump. The player calls
+that freeze transient; do not engineer around it.
 
 Live findings (10-10):
 - Position: read `client_object.actor_body()` (walk.position). The player

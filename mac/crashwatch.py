@@ -314,6 +314,12 @@ def player_message(row: dict) -> str:
     if why == "backpack full":
         used, room = row.get("used"), row.get("capacity")
         return f"Backpack {used}/{room}: the bot stopped. Make room, then start it again."
+    if why == "done with every hunt":
+        return "Every hunt is done; the bot stopped."
+    if why.startswith("done with "):
+        return f"The bot is {why}."
+    if why.startswith("bot error:"):
+        return f"The bot stopped on a repeating {why}. Tell Claude; the game is fine."
     if why.startswith("stuck on"):
         return f"The game is {why}. It may have lost its connection; restart it if it does not clear."
     zone = row.get("zone") or "another zone"

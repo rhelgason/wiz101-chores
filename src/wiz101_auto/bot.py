@@ -532,7 +532,11 @@ async def run(cfg: Config):
     s = cfg.safety
     controller = Controller(s.stop_key, s.pause_key, s.max_hours)
     doing = {
-        "seeds": "Savarstaad seeds until stopped (Troubled Warriors and Splithoof Barbarians), no teleports",
+        "seeds": (
+            "hunts in turn (seeds.hunts), no teleports"
+            if cfg.seeds.hunts
+            else "Savarstaad seeds until stopped (Troubled Warriors and Splithoof Barbarians), no teleports"
+        ),
         "pet": "the dance game while energy can pay, waiting for energy in between",
         "gather": f"{cfg.gather.reagent} from its spawn spots, on foot, around creatures",
     }.get(cfg.mode, "the day plan")

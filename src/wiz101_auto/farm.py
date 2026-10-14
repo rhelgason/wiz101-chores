@@ -115,8 +115,10 @@ SCARECROW_PIPS = 7  # its pip cost, and so its mana cost
 DRY_WITH_PIPS = 2  # rounds Scarecrow stayed uncastable with its pips up (one may be a stun)
 DRY_BLIND = 7  # rounds, when neither mana nor pips read
 FLEE_WAIT = 25.0  # a flee takes effect when the round resolves
+last_foes: dict = {}  # the enemies seen in the last duel, by owner id -> name
 last_vitals: dict = {}  # the wizard's own combatant, last read in a duel (gives the globes' maxima)
 # Death drains. Cast on an enemy; the caster is the one who is healed.
+ATTACK_KINDS = ("damage", "steal")  # card type names that hit an enemy
 DRAIN_NAMES = ("ghoul", "wraith", "vampire", "skeletal dragon")
 DRAIN_EFFECTS = {"steal_health", "steal_over_time"}
 # Savarstaad. Empower, then Scarecrow, then Scarecrow again if they live.
@@ -131,7 +133,7 @@ def _flat(name: str) -> str:
 def mob_rank(name: str, groups: tuple[tuple[str, ...], ...]) -> int | None:
     """Which name group matches, starting at 0. An earlier group is preferred."""
     flat = _flat(name)
-    if not flat:
+    if not flat or "standin" in flat:  # 10-14: "MB-Standin-OlearyProwler" is scenery, not a creature
         return None
     for rank, group in enumerate(groups):
         if any(_flat(needle) in flat for needle in group if _flat(needle)):
@@ -697,6 +699,9 @@ async def play_current_fight(client, controller, *, combo: bool = True) -> str |
     logger.info("farm: a fight is already going; playing it")
     fled = await _play(client, controller, combo=combo)
     await _note_potato(client)
+    from . import ui
+
+    await ui.close_endorsement(client)  # shown when another player joined the duel
     return fled
 
 
@@ -1274,6 +1279,7 @@ async def _play(client, controller, combo: bool = False) -> str | None:
     handler = AoeHandler(client)
     done: list[str] = []
     memo: dict = {}
+    last_foes.clear()
     announced = False
     missing = 0
     idle = 0
@@ -1332,6 +1338,7 @@ async def _play(client, controller, combo: bool = False) -> str | None:
                 continue
         phantom = 0
         casts += 1
+        await _note_foes(handler)
         try:
             if combo:
                 step = await _cast_combo(handler, done, heal=needs_heal(ratio), memo=memo)
@@ -1501,6 +1508,14 @@ async def _cast_combo(handler, done: list[str], heal: bool = False, memo: dict |
         logger.info(f"farm: casting {step} ({vitals_text(vitals)})")
         blackbox.event("cast", spell=step, vitals=vitals)
         return step
+    if action[0] in ("discard", "pass") and "scarecrow" in done:
+        # 10-14 Knight's Court: Scarecrow left a prowler standing, no other Scarecrow came,
+        # and passing for 4 minutes ended in a flee. After one Scarecrow, hit what is left.
+        hit = await _cast_attack(handler)
+        if hit:
+            logger.info(f"farm: no Scarecrow to cast; {hit} ({vitals_text(vitals)})")
+            blackbox.event("cast", spell=hit, why="no scarecrow", vitals=vitals)
+            return "attack"
     if action[0] == "discard":
         names = [hand[i][1]["name"] for i in action[1]]
         logger.info(f"farm: no Scarecrow in hand; discarding {', '.join(names)} to draw for it")
@@ -1552,6 +1567,27 @@ async def _effect_names(card) -> list[str]:
     return names
 
 
+async def _note_foes(handler) -> None:
+    """Remember every enemy in the duel (ones that join later too) for the hunt count."""
+    try:
+        members = await handler.get_members()
+    except Exception as exc:
+        if _client_closed(exc):
+            raise
+        return
+    for member in members:
+        try:
+            if not await member.is_monster():
+                continue
+            key = await member.owner_id()
+            if key not in last_foes:
+                last_foes[key] = await member.name() or "?"
+        except Exception as exc:
+            if _client_closed(exc):
+                raise
+            continue
+
+
 async def _living_enemies(handler) -> list:
     enemies = []
     for member in await handler.get_members():
@@ -1583,6 +1619,37 @@ async def _cast_drain(handler) -> str | None:
         blackbox.event("cast", spell=name or "death drain", why="low health")
         return "heal"
     return None
+
+
+async def _cast_attack(handler) -> str | None:
+    """A castable death drain, else another damage card, on one living enemy.
+    Never Scarecrow or Empower (the combo's own) or a buff, ward, or heal."""
+    enemies = await _living_enemies(handler)
+    if not enemies:
+        return None
+    best = None
+    for card in await handler.get_cards():
+        try:
+            if not await card.is_castable():
+                continue
+            name = await _card_name(card)
+            if combo_spell(name):
+                continue
+            kind = (await card.type_name() or "").lower()
+            effects = await _effect_names(card)
+        except Exception as exc:
+            if _client_closed(exc):
+                raise
+            continue
+        if is_death_heal(name, effects):
+            best = (card, name)
+            break
+        if kind in ATTACK_KINDS and best is None:
+            best = (card, name)
+    if best is None:
+        return None
+    await best[0].cast(enemies[0])
+    return f"casting {best[1] or 'an attack'}"
 
 
 async def _cast_or_pass(handler, heal: bool = False) -> str:

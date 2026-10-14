@@ -4,9 +4,14 @@
 #
 #   mac/run.sh pet        dance games in the Pet Pavilion
 #   mac/run.sh seeds      Savarstaad seed farm (start in Boar Camp)
-#   mac/run.sh gather     reagent farm (gather.reagent in config.yaml; Black Lotus by default)
+#   mac/run.sh gather     reagent farm (Black Lotus by default)
 #   mac/run.sh            whatever config.yaml says (pet or seeds on this Mac)
 #   mac/run.sh doctor     versions and paths
+#   mac/run.sh --help     every setting as a flag, e.g.
+#     mac/run.sh seeds --hunt "Charmed Slave:30" --hunt "O'Leary Prowler:30"
+#     mac/run.sh gather --reagent "Black Lotus" --zones "Shirataki Temple" --data-jumps
+#     mac/run.sh seeds --leash 4000 --no-sell
+# Flags override config.yaml, which is optional (read when it exists).
 #
 # Every run gets logs/runs/<time>-<mode>/: bot.log, events.jsonl, console.log,
 # hook_session.json, run.json, and CRASH.md if the game dies while it runs.
@@ -72,13 +77,21 @@ printf 'python313.zip\n.\nimport site\n%s\n' "$WINSRC" > "$PTH"
 CONFIG="config.yaml"
 MODE=""
 case "${1:-}" in
-  "" ) ;;
-  pet|seeds|gather) MODE="$1" ;;
+  "" | -* ) ;;
+  pet|seeds|gather) MODE="$1"; shift ;;
   chores|reagents)
     echo "$1 travels by teleport, and teleports closed this Wine client. On the Mac: pet, seeds or gather."
     exit 1 ;;
-  *) CONFIG="$1" ;;
+  *) CONFIG="$1"; shift ;;
 esac
+# Everything left is settings for the bot (mac/run.sh --help lists them).
+EXTRA=("$@")
+for arg in ${EXTRA[@]+"${EXTRA[@]}"}; do
+  if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+    "$WINE" "$PY" -m wiz101_auto run --help 2>/dev/null
+    exit 0
+  fi
+done
 
 # The bracket keeps this check from matching its own command line.
 if pgrep -f '[w]iz101_auto run' >/dev/null 2>&1; then
@@ -97,8 +110,10 @@ echo "starting ${MODE:-the configured} mode in the Wizard101 bottle"
 echo "this run's logs: $RUN_DIR"
 echo "stop: the Wiz menu, Stop Wizard Bot.command, Ctrl+C here, or: python3 -m wiz101_auto stop"
 
-ARGS=(-u -m wiz101_auto run -c "$CONFIG" --run-dir "$RUN_DIR")
+ARGS=(-u -m wiz101_auto run --run-dir "$RUN_DIR")
+[[ -f "$ROOT/$CONFIG" || -f "$CONFIG" ]] && ARGS+=(-c "$CONFIG")
 [[ -n "$MODE" ]] && ARGS+=(-m "$MODE")
+ARGS+=(${EXTRA[@]+"${EXTRA[@]}"})
 "$WINE" "$PY" "${ARGS[@]}" > >(tee -a "$ROOT/$RUN_DIR/console.log") 2>&1 &
 BOT=$!
 "$MACPY" "$ROOT/mac/crashwatch.py" watch --run-dir "$RUN_DIR" --bot-pid "$BOT" &

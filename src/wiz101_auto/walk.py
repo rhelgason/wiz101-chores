@@ -22,7 +22,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from . import blackbox
+from . import blackbox, ui
 
 WM_KEYDOWN, WM_KEYUP = 0x100, 0x101
 VK = {"W": 0x57, "A": 0x41, "S": 0x53, "D": 0x44, "X": 0x58, "B": 0x42}
@@ -394,9 +394,13 @@ async def walk_to(
             if now - last_mark >= PROGRESS_EVERY:
                 moved = math.dist(here[:2], last_pos[:2])
                 last_mark, last_pos = now, here
-                if moved < 1.0 and math.dist(here[:2], start[:2]) < 1.0 and request_focus(f"{why}: moved 0"):
-                    await asyncio.sleep(FOCUS_SETTLE)  # keys only reach the active Mac app
-                    continue
+                if moved < 1.0 and math.dist(here[:2], start[:2]) < 1.0:
+                    # A popup holds the wizard still too ("Endorse a Wizard").
+                    if await ui.close_endorsement(client):
+                        continue
+                    if request_focus(f"{why}: moved 0"):
+                        await asyncio.sleep(FOCUS_SETTLE)  # keys only reach the active Mac app
+                        continue
                 if stalled(moved):
                     stalls += 1
                     if stalls >= 4:

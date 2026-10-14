@@ -35,10 +35,11 @@ SPIRAL_DOOR_PREV = ["WorldView", "", "messageBoxBG", "ControlSprite", "optionWin
 MISSING_AREA = ["MessageBoxModalWindow", "messageBoxBG", "messageBoxLayout", "AdjustmentWindow"]
 MISSING_AREA_RETRY = [*MISSING_AREA, "RetryBtn"]
 CANCEL_CHEST_REROLL = ["WorldView", "Container", "background", "", "CancelButton"]
-# "Endorse a Wizard" after fighting alongside another player.
-ENDORSEMENT = ["WorldView", "EndorsementWindow"]
-ENDORSE_FRIENDLY = [*ENDORSEMENT, "MainLayout", "FriendlyWindow", "FriendlyButton"]
-ENDORSE_CLOSE = [*ENDORSEMENT, "CloseEndorsementWindowButton"]
+# "Endorse a Wizard" after fighting alongside another player
+# (_Shared-WorldData.wad GUI/EndorsementWindow.gui). While it is up the wizard
+# does not move: 10-13 10:58 it froze a seeds run in Northguard for 27 min.
+ENDORSEMENT = "EndorsementWindow"
+ENDORSE_CLOSE = "CloseEndorsementWindowButton"
 
 TRAINER_EXIT = ["WorldView", "NPCTrainingGUI", "TrainingSelection", "Exit"]
 
@@ -497,6 +498,22 @@ async def press_interact(client, *, keys: bool = True) -> bool:
     if keys:
         await press_x(client)
     return clicked
+
+
+async def close_endorsement(client) -> bool:
+    """Close the "Endorse a Wizard" window if it is up (no endorsement is given)."""
+    try:
+        for window in await client.root_window.get_windows_with_name(ENDORSEMENT):
+            if not await window.is_visible():
+                continue
+            for button in await window.get_windows_with_name(ENDORSE_CLOSE):
+                await client.mouse_handler.click_window(button)
+                logger.info("ui: closed the Endorse a Wizard window (someone joined a fight)")
+                await asyncio.sleep(0.5)
+                return True
+    except Exception as exc:
+        logger.debug(f"ui: endorsement window check failed: {exc}")
+    return False
 
 
 async def close_menus(client) -> int:

@@ -62,6 +62,9 @@ class SeedsConfig:
     northguard_full: float = 0.98  # a trip fills the globe this far (then tops up the other one)
     northguard_minutes: float = 10.0  # ... or stays this long at most
     sell: bool = True  # bag nearly full: backpack Quick Sell of this run's loot, in place
+    # Other creatures instead of the boars, in turn; the run stops after the
+    # last. Each: a name, or {creature, count (30), zone, refill}. Empty: seeds.
+    hunts: list = field(default_factory=list)
 
 
 @dataclass
@@ -109,7 +112,12 @@ def _merge(obj: Any, data: dict[str, Any], path: str = "") -> Any:
     return obj
 
 
-def load_config(path: str | Path | None) -> Config:
+SECTIONS = ("seeds", "gather", "pet", "safety", "reagents")
+
+
+def load_config(path: str | Path | None, overrides: dict[str, Any] | None = None) -> Config:
+    """Defaults, then the YAML file (optional), then `overrides` ({"seeds.leash": 4000, ...},
+    from the command line), then validation."""
     cfg = Config()
     if path:
         p = Path(path)
@@ -117,6 +125,29 @@ def load_config(path: str | Path | None) -> Config:
             _merge(cfg, yaml.safe_load(p.read_text(encoding="utf-8")) or {})
         else:
             raise FileNotFoundError(p)
+    for key, value in (overrides or {}).items():
+        section, _, name = key.rpartition(".")
+        target = getattr(cfg, section) if section else cfg
+        _merge(target, {name: value}, f"{section}." if section else "")
+    return validate(cfg)
+
+
+def parse_hunt(text: str) -> dict[str, Any]:
+    """`--hunt` text: 'NAME', 'NAME:COUNT', 'NAME@World/Zone' or 'NAME:COUNT@World/Zone'."""
+    spec, _, zone = text.partition("@")
+    name, _, count = spec.rpartition(":") if ":" in spec else (spec, "", "")
+    hunt: dict[str, Any] = {"creature": name.strip()}
+    if count.strip():
+        if not count.strip().isdigit():
+            raise ValueError(f"--hunt {text!r}: the count after ':' must be a number")
+        hunt["count"] = int(count)
+    if zone.strip():
+        hunt["zone"] = zone.strip()
+    _check_hunt(hunt)
+    return hunt
+
+
+def validate(cfg: Config) -> Config:
     from .safety import parse_hotkey
 
     parse_hotkey(cfg.safety.stop_key)
@@ -136,4 +167,25 @@ def load_config(path: str | Path | None) -> Config:
         raise ValueError("gather.zone_count must be 1 or more")
     if cfg.seeds.leash < 500:
         raise ValueError("seeds.leash must be at least 500")
+    for item in cfg.seeds.hunts:
+        _check_hunt(item)
     return cfg
+
+
+HUNT_KEYS = {"creature": str, "count": int, "zone": str, "refill": str}
+
+
+def _check_hunt(item: Any) -> None:
+    if isinstance(item, str):
+        item = {"creature": item}
+    if not isinstance(item, dict):
+        raise ValueError(f"seeds.hunts: each hunt is a creature name or a mapping, not {item!r}")
+    for key, value in item.items():
+        if key not in HUNT_KEYS:
+            raise ValueError(f"seeds.hunts: unknown key {key!r} (known: {', '.join(HUNT_KEYS)})")
+        if not isinstance(value, HUNT_KEYS[key]) or isinstance(value, bool):
+            raise ValueError(f"seeds.hunts: {key} should be {HUNT_KEYS[key].__name__}, got {value!r}")
+    if not str(item.get("creature", "")).strip():
+        raise ValueError("seeds.hunts: every hunt needs a creature")
+    if item.get("count", 30) < 1:
+        raise ValueError("seeds.hunts: count must be 1 or more")

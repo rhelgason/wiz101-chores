@@ -1,4 +1,6 @@
-# Every option. The rules are PLAYBOOK.md.
+# Every option. The rules are PLAYBOOK.md. This file is optional: every option
+# is also a flag (mac/run.sh --help), e.g. `mac/run.sh seeds --leash 4000`,
+# and a flag beats the file.
 # On the Mac only `pet`, `seeds` and `gather` run: the other modes travel by
 # teleport, and teleports closed the Wine client.
 mode: seeds                  # pet | seeds | gather   (Windows also: chores | reagents)
@@ -18,6 +20,10 @@ seeds:
   northguard_full: 0.98      # a Northguard trip fills the globe this far (then tops up the other)
   northguard_minutes: 10     # ... or stays this long at most
   sell: true                 # bag nearly full: Quick Sell this run's loot from the backpack
+  hunts: []                  # creatures to defeat (count = enemies), in turn; "seeds" is the boar farm
+  # hunts:                   # flag: --hunt "O'Leary Prowler:30" --hunt "Charmed Slave:30" --hunt seeds
+  #   - {creature: Charmed Slave, count: 30}
+  #   - {creature: O'Leary Prowler, count: 30, zone: "World/ZoneName"}   # zone: else where the run starts
 
 gather:
   reagent: Black Lotus       # any reagent the zone files list a "Path-<Name>" for (python3 -m wiz101_auto.reagent_spots)

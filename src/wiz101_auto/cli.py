@@ -8,7 +8,7 @@ import sys
 
 from loguru import logger
 
-from .config import MODES, load_config
+from .config import MODES, SECTIONS, Config, load_config, parse_hunt
 
 ACTIVITY_LOG = "activity.log"
 
@@ -120,6 +120,75 @@ def _lower_priority():
         pass
 
 
+# Words for the flags people reach for; every other setting gets "built in: X".
+FLAG_HELP = {
+    "seeds.leash": "only creatures this close to home",
+    "seeds.rest_minutes": "stand still this long for health or mana, then fight anyway",
+    "seeds.northguard_trips": "out of mana with no wisp near: Mark, Northguard wisps, Recall",
+    "seeds.northguard_full": "a Northguard trip fills the globe this far (0..1)",
+    "seeds.northguard_minutes": "... or stays this long at most",
+    "seeds.sell": "bag nearly full: Quick Sell this run's loot",
+    "gather.reagent": 'reagent to farm, e.g. "Black Lotus"',
+    "gather.world": "the reagent's world (empty: its usual one)",
+    "gather.zones": "a zone to tour (repeat it for more; empty: the best few)",
+    "gather.zone_count": "how many of the best zones to tour in turn",
+    "gather.respawn_minutes": "jump pilot: wait between rounds for respawns",
+    "pet.stage": "lowest | rotate | random | Wizard City | Krokotopia | Marleybone | MooShu | Dragonspyre",
+    "pet.feed": "feed the first snack after each win",
+    "safety.data_jumps": "experimental data-only jumps (gather only)",
+    "safety.max_hours": "stop after this many hours (0: never)",
+}
+SKIP_FLAGS = {"seeds.hunts", "pet.goals"}  # hunts: --hunt; goals: a mapping, config file only
+VAGUE = {"auto", "enabled"}  # too vague without the section in front
+
+
+def add_setting_flags(parser: argparse.ArgumentParser) -> None:
+    """A flag for every setting: --seeds-leash (and --leash where the name is unique)."""
+    from collections import Counter
+    from dataclasses import fields
+
+    cfg = Config()
+    counts = Counter(f.name for s in SECTIONS for f in fields(getattr(cfg, s)))
+    group = parser.add_argument_group("settings (each overrides config.yaml, which is optional)")
+    group.add_argument(
+        "--hunt",
+        action="append",
+        default=None,
+        metavar="NAME[:COUNT][@ZONE]",
+        help="seeds mode: defeat this creature instead of the boars (repeat for more, done in turn); "
+        "COUNT defaults to 30, ZONE (e.g. World/Zone) to where the run starts; "
+        "--hunt seeds is the boar farm (until stopped), e.g. last in the list",
+    )
+    for section in SECTIONS:
+        for f in fields(getattr(cfg, section)):
+            key = f"{section}.{f.name}"
+            if key in SKIP_FLAGS:
+                continue
+            default = getattr(getattr(cfg, section), f.name)
+            flags = ["--" + key.replace(".", "-").replace("_", "-")]
+            if counts[f.name] == 1 and f.name not in VAGUE:
+                flags.append("--" + f.name.replace("_", "-"))
+            words = FLAG_HELP.get(key, "")
+            help_text = f"{words} (built in: {default!r})" if words else f"built in: {default!r}"
+            kwargs = {"dest": "set:" + key, "default": None, "help": help_text}
+            if isinstance(default, bool):
+                group.add_argument(*flags, action=argparse.BooleanOptionalAction, **kwargs)
+            elif isinstance(default, list):
+                group.add_argument(*flags, action="append", metavar="NAME", **kwargs)
+            else:
+                kind = type(default)
+                group.add_argument(*flags, type=kind, metavar=kind.__name__.upper(), **kwargs)
+
+
+def setting_overrides(args: argparse.Namespace) -> dict:
+    """The settings given on the command line, as {"seeds.leash": 4000.0, ...}."""
+    given = vars(args).items()
+    out = {key[4:]: value for key, value in given if key.startswith("set:") and value is not None}
+    if getattr(args, "hunt", None):
+        out["seeds.hunts"] = [parse_hunt(text) for text in args.hunt]
+    return out
+
+
 def main(argv: list[str] | None = None):
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -137,6 +206,7 @@ def main(argv: list[str] | None = None):
     run_p.add_argument("-m", "--mode", choices=list(MODES), help="override config mode")
     run_p.add_argument("-v", "--verbose", action="store_true")
     run_p.add_argument("--run-dir", default=None, help="folder for this run's logs (mac/run.sh makes one)")
+    add_setting_flags(run_p)
 
     sub.add_parser("relog", help="quit to character select and play again (bot stopped)")
     sub.add_parser("set-login", help="save the game login (Windows Credential Manager) for game restarts")
@@ -294,9 +364,15 @@ def main(argv: list[str] | None = None):
         print(petclient.status_text())
         return 0
 
-    cfg = load_config(args.config)
+    overrides = setting_overrides(args)
     if args.mode:
-        cfg.mode = args.mode
+        overrides["mode"] = args.mode
+    elif "seeds.hunts" in overrides:
+        overrides["mode"] = "seeds"  # --hunt alone means the seeds loop
+    try:
+        cfg = load_config(args.config, overrides)
+    except ValueError as exc:
+        parser.error(str(exc))
     import os
 
     from . import __version__, blackbox
@@ -310,6 +386,7 @@ def main(argv: list[str] | None = None):
         "python": sys.version,
         "argv": sys.argv,
         "config": args.config,
+        "command_line_settings": overrides,
         "mode": cfg.mode,
         "seeds": vars(cfg.seeds),
         "gather": vars(cfg.gather),

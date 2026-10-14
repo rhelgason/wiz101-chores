@@ -270,3 +270,69 @@ def test_northguard_tops_up_the_need_then_the_other_globe(monkeypatch):
     asyncio.run(farm_.gather("mana"))
     assert globes["mana"] >= 0.98 and globes["health"] >= 0.98
     assert walked[:4] == ["mana"] * 3 + ["health"]
+
+
+def test_crashwatch_words_finished_hunts():
+    import importlib.util
+    import pathlib
+
+    path = pathlib.Path(__file__).parent.parent / "mac" / "crashwatch.py"
+    spec = importlib.util.spec_from_file_location("crashwatch_for_hunts", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    done = module.player_message({"kind": "needs_player", "why": "done with every hunt"})
+    assert done.startswith("Every hunt")
+    text = module.player_message({"kind": "needs_player", "why": "done with A; walk to the Bs and start"})
+    assert text.startswith("The bot is done with A")
+
+
+def test_the_seeds_step_reaches_its_round_method():
+    """10-14: self.hunt (the current Hunt) hid the hunt() method; every step failed for ten hours."""
+    farm_, _ = farm_for_test()
+    assert callable(farm_.hunt_round)
+    assert isinstance(farm_.hunt, seeds.Hunt)
+
+
+def test_a_repeating_step_error_stops_the_run(monkeypatch):
+    events = []
+    monkeypatch.setattr(seeds.blackbox, "event", lambda kind, **kw: events.append((kind, kw)))
+
+    async def no_sleep(_s):
+        return None
+
+    monkeypatch.setattr(seeds.asyncio, "sleep", no_sleep)
+    stopped = asyncio.Event()
+    calls = []
+
+    async def checkpoint():
+        return None
+
+    def stop(why):
+        calls.append(why)
+        stopped.set()
+
+    controller = SimpleNamespace(stopped=stopped, checkpoint=checkpoint, stop=stop)
+    farm_ = SimpleNamespace(hunts=[], summary=lambda: "nothing")
+    tries = []
+
+    async def step():
+        tries.append(1)
+        raise TypeError("'Hunt' object is not callable")
+
+    farm_.step = step
+    asyncio.run(seeds.run_steps(farm_, controller))
+    assert len(tries) == seeds.SAME_ERROR_STOP
+    assert calls and "not callable" in calls[0]
+    assert ("needs_player" in [k for k, _ in events])
+
+
+def test_finishing_a_hunt_moves_on_to_the_boars():
+    farm_, _ = farm_for_test()
+    farm_.hunts = seeds.hunts_from([{"creature": "Charmed Slave", "count": 2}, "seeds"])
+    farm_.hunt = farm_.hunts[0]
+    farm_.kills = 2
+    asyncio.run(farm_.check_hunt())
+    assert farm_.hunt.seeds and farm_.zone == seeds.SAVARSTAAD and farm_.home is None
+    farm_.kills = 500
+    asyncio.run(farm_.check_hunt())  # the seed farm runs until stopped
+    assert farm_.hunt.seeds
