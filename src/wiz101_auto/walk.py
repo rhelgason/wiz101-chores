@@ -257,6 +257,46 @@ async def position(client) -> tuple[float, float, float]:
     return (p.x, p.y, p.z)
 
 
+KEYS_WAIT = 90.0
+KEYS_TAP = 0.25
+KEYS_MOVED = 5.0  # a tap that moved the wizard less than this moved nothing
+
+
+async def wait_for_keys(client, *, why: str, wait: float | None = None, tap: float = KEYS_TAP) -> str:
+    """Tap S then W until the wizard moves, asking the Mac for focus between taps.
+
+    'ok' (the first tap moved it: keys were already arriving), 'now' (it moved
+    once focus came), or 'never'. On 10-16 the first seeds walk moved 0 four
+    times while Wizard101 was not yet the active app, and that was taken for a
+    wall.
+    """
+    wait = KEYS_WAIT if wait is None else wait
+    end_by = time.monotonic() + wait
+    keys = keys_for(client)
+    first = True
+    while True:
+        before = await position(client)
+        await keys.hold(VK["S"], tap)
+        await keys.hold(VK["W"], tap)
+        await asyncio.sleep(0.3)
+        if math.dist(before[:3], (await position(client))[:3]) >= KEYS_MOVED:
+            if not first:
+                logger.info(f"walk: keys reach the game now ({why})")
+                blackbox.event("keys_back", why=why)
+            return "ok" if first else "now"
+        if first:
+            logger.info(f"walk: keys are not reaching the game ({why}); asking the Mac for focus")
+            blackbox.event("keys_wait", why=why)
+            first = False
+        if time.monotonic() >= end_by:
+            break
+        request_focus(f"{why}: a tap moved nothing")
+        await asyncio.sleep(min(2.0, max(0.0, end_by - time.monotonic())))
+    logger.warning(f"walk: keys did not reach the game in {wait:.0f}s ({why})")
+    blackbox.event("needs_player", why="keys are not reaching Wizard101 (click its window?)")
+    return "never"
+
+
 async def here(client):
     """position() as an object with .x .y .z, for code written against WizWalker's XYZ."""
     from types import SimpleNamespace

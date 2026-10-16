@@ -151,6 +151,14 @@ How the code enforces it:
   key reached the game (every walk moved 0, focus said ok), the gate
   "failed", Go Home landed in the house (no nav graph) and it stuck there.
   A trip that never moved says so ("keys are not reaching Wizard101").
+- A leg that moved 0 first checks the keys (`walk.wait_for_keys`: tap S/W,
+  ask for focus, up to 90s). Keys that arrive only after the wait are not a
+  wall: no trouble spot, the same walk is planned again (3 times per walk).
+  Keys that never arrive: `walk_in_zone` returns "no keys". 10-16 09:00
+  (run 20261016-090047-seeds): started in Savarstaad ~25000 from Boar Camp,
+  four 0-move legs before focus, the walk "stuck", and seeds made that spot
+  home and waited for boars that were not there. `seeds.settle` now keeps
+  no home farther than `CAMP_NEAR` from the camp; it retries every 20s.
 - a fight on the way is played (`client._on_fight`), then travel goes on.
   Failures dump `entities-<zone>.txt` and `spiral_door_windows.txt` into the
   run folder.

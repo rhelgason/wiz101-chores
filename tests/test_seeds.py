@@ -1,5 +1,6 @@
 """The Savarstaad seed mode: who to pull, when to recover, when to stop."""
 
+import asyncio
 from types import SimpleNamespace
 
 from wiz101_auto.farm import GROUPS
@@ -216,3 +217,28 @@ def test_a_stand_in_object_is_not_a_creature():
     groups = (("olearyprowler",),)
     assert mob_rank("MB-Standin-OlearyProwler", groups) is None
     assert mob_rank("Cat-Burglar-Gray-L29 O'Leary Prowler", groups) == 0
+
+
+def test_a_failed_walk_far_from_the_camp_does_not_make_home_there(monkeypatch):
+    """10-16: the first walk moved 0 (no focus yet), and a spot 25000 units
+    from the boars became home; the bot waited there for creatures."""
+    from wiz101_auto import navigate, seeds
+
+    farm = seeds.SeedFarm(client=None, controller=None, task={}, cfg=SimpleNamespace(hunts=[], leash=4500.0))
+    far = (-5481.0, -3692.0, 0.0)
+
+    async def no_walk(*_a, **_k):
+        return "no keys"
+
+    async def where():
+        return far
+
+    async def no_sleep(*_a):
+        return None
+
+    monkeypatch.setattr(navigate, "walk_in_zone", no_walk)
+    monkeypatch.setattr(seeds.blackbox, "event", lambda *a, **k: None)
+    monkeypatch.setattr(seeds.asyncio, "sleep", no_sleep)
+    farm.where = where
+    asyncio.run(farm.settle(far))
+    assert farm.home is None and farm.camp_fails == 1

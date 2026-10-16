@@ -60,6 +60,7 @@ CONTACT = 150.0  # a walk that ended farther than this from it cannot have start
 AFTER_FIGHT = 0.6
 BOAR_CAMP = (-23200.0, 14300.0, 502.0)  # Splithoof Barbarians; on the zone's walking graph
 CAMP_NEAR = 6000.0  # a start this close to the camp keeps the wizard's own spot as home
+CAMP_RETRY = 20.0  # seconds before another try at walking to the camp
 TRAVEL_RETRY = 120.0
 SAME_ERROR_STOP = 20  # one error this many steps running stops the run
 STUCK_BUSY = 300.0  # a loading screen or dialogue this long: tell the player (10-12: 2 h on one)
@@ -311,6 +312,7 @@ class SeedFarm:
         self.said = ""
         self.quiet_since = 0.0
         self.home_fails = 0
+        self.camp_fails = 0
         self.next_trip = 0.0
         self.topped_up = False
         self.owed: list[str] = []  # needs a duel proved (fled, or defeated): refilled before the next pull
@@ -487,8 +489,22 @@ class SeedFarm:
             if outcome == "left zone":
                 return
             me = await self.where()
+            if outcome != "reached" and math.dist(me[:2], camp[:2]) > CAMP_NEAR:
+                # 10-16: a walk that never got focus made a spot 25000 units from
+                # the boars "home", and the bot waited there for creatures.
+                self.camp_fails += 1
+                away = math.dist(me[:2], camp[:2])
+                logger.warning(
+                    f"seeds: the walk to the camp ended {outcome}, still {away:.0f} away; "
+                    f"trying again in {CAMP_RETRY:.0f}s"
+                )
+                if self.camp_fails == 2:
+                    blackbox.event("needs_player", why="could not walk to the camp", outcome=outcome)
+                await asyncio.sleep(CAMP_RETRY)
+                return
             if outcome != "reached":
                 logger.warning(f"seeds: the walk to the camp ended {outcome}; farming from here")
+        self.camp_fails = 0
         self.home = me
         logger.info(
             f"seeds: home is ({me[0]:.0f}, {me[1]:.0f}); pulling creatures within {self.cfg.leash:.0f} of it"

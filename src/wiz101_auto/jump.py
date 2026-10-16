@@ -133,32 +133,12 @@ class Jumper:
 
     async def keys_reach_game(self) -> bool:
         """Tap S then W until the wizard moves (asking the Mac for focus between taps)."""
-        from .walk import VK, keys_for, position, request_focus
+        from .walk import wait_for_keys
 
         if self.keys_ok:
             return True
-        keys = keys_for(self.client)
-        end_by = time.monotonic() + KEYS_WAIT
-        told = False
-        while time.monotonic() < end_by:
-            before = await position(self.client)
-            await keys.hold(VK["S"], KEYS_TAP)
-            await keys.hold(VK["W"], KEYS_TAP)
-            await asyncio.sleep(0.3)
-            if math.dist(before[:3], (await position(self.client))[:3]) >= MOVED:
-                self.keys_ok = True
-                if told:
-                    logger.info("jump: keys reach the game now")
-                return True
-            if not told:
-                logger.info("jump: keys are not reaching the game yet; asking the Mac for focus")
-                blackbox.event("jump_keys_wait")
-                told = True
-            request_focus("jump: a tap moved nothing")
-            await asyncio.sleep(2.0)
-        logger.warning(f"jump: keys did not reach the game in {KEYS_WAIT:.0f}s")
-        blackbox.event("needs_player", why="keys are not reaching Wizard101 (click its window?)")
-        return False
+        self.keys_ok = await wait_for_keys(self.client, why="jump", wait=KEYS_WAIT, tap=KEYS_TAP) != "never"
+        return self.keys_ok
 
     async def _settled(self) -> None:
         """Wait out the pacing: the quiet time, no loading screen, the wizard standing still."""

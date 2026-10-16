@@ -34,6 +34,7 @@ GATE_REACH = 35.0
 DOOR_REACH = 140.0
 PUSH_SECONDS = 1.6  # W held through a gate that the walk did not cross yet
 MAX_REPLANS = 3
+MAX_KEY_WAITS = 3  # waits for focus in one walk that do not count as replans
 TROUBLE_REACH = 250.0  # graph edges passing this close to a stuck spot are avoided
 TROUBLE_MINUTES = 60.0  # ... for this long, on every walk in that zone
 RETREAT_SECONDS = 6.0
@@ -266,9 +267,10 @@ class Navigator:
         """Walk to `goal` in this zone on the game's paths.
 
         'reached', 'left zone' (a gate or a load took the wizard elsewhere),
-        'fight' (one started and was played; call again), or 'stuck'.
+        'fight' (one started and was played; call again), 'no keys' (taps
+        never moved the wizard, focus or not), or 'stuck'.
         """
-        from .walk import walk_point
+        from .walk import KEYS_MOVED, wait_for_keys, walk_point
 
         zone = await self.zone()
         graph = navmesh.zone_graph(zone)
@@ -295,7 +297,10 @@ class Navigator:
         if jumped:
             return jumped
 
-        for plan in range(MAX_REPLANS + 1):
+        plan = -1
+        key_waits = 0
+        while plan < MAX_REPLANS:
+            plan += 1
             me = await self.here()
             path = None
             if graph is not None:
@@ -345,6 +350,18 @@ class Navigator:
                 if result.outcome == "fight":
                     await self._busy()
                     return "fight"
+                if result.outcome in ("stuck", "timeout") and result.moved < KEYS_MOVED:
+                    # Moved nothing at all: maybe the keys are not arriving (the game
+                    # is not the active Mac app), not a wall. 10-16: four such legs
+                    # ended the walk to Boar Camp 25000 units short.
+                    keys = await wait_for_keys(self.client, why=f"{why} {i + 1}/{len(path)}")
+                    if keys == "never":
+                        return "no keys"
+                    if keys == "now" and key_waits < MAX_KEY_WAITS:
+                        key_waits += 1
+                        plan -= 1  # not the path's fault: plan the same walk again
+                        failed = True
+                        break
                 if result.outcome in ("stuck", "timeout"):
                     here = await self.here()
                     note_trouble(zone, here)
@@ -397,6 +414,8 @@ class Navigator:
             )
             if outcome == "fight":
                 continue
+            if outcome == "no keys":
+                return False
             if outcome == "left zone":
                 await wait_for_loading(self.client, appear_timeout=4.0)
                 return await self.zone() != here

@@ -364,6 +364,7 @@ def test_a_gate_that_will_not_load_does_not_send_the_wizard_home(world, monkeypa
 
     monkeypatch.setattr(walk, "walk_point", frozen)
     monkeypatch.setattr(walk, "keys_for", lambda c: SimpleNamespace(hold=_noop))
+    monkeypatch.setattr(walk, "KEYS_WAIT", 0.1)
     client = world.client()
     assert asyncio.run(navigate.go_to_zone(client, "Beta/B_Hub")) is False
     assert went_home == []
@@ -408,3 +409,50 @@ def test_walk_length_follows_the_graph():
     graph = navmesh.NavGraph.parse(nav_bytes(nodes, edges))
     assert navigate.walk_length(graph, (0.0, 0.0), (960.0, 0.0)) == pytest.approx(960.0)
     assert navigate.walk_length(None, (0.0, 0.0), (1000.0, 0.0)) == pytest.approx(1500.0)
+
+
+def test_a_leg_that_moved_nothing_waits_for_focus_and_is_not_trouble(world, monkeypatch):
+    """10-16: the first walk of a seeds run moved 0 four times before Wizard101
+    was the active app; each was marked a wall and the walk gave up."""
+    client = world.client()
+    keys = client._posted_keys
+    real_hold = type(keys).hold
+    focused = [False]
+
+    async def hold(self, vk, seconds):
+        if focused[0]:
+            await real_hold(self, vk, seconds)
+
+    def focus(why):
+        focused[0] = True
+        return True
+
+    monkeypatch.setattr(type(keys), "hold", hold)
+    monkeypatch.setattr(walk, "request_focus", focus)
+    calls = []
+    real = walk.walk_point
+
+    async def unfocused_first(c, point, **kwargs):
+        calls.append(point)
+        if not focused[0]:
+            return walk.WalkResult("timeout", 500, 500, 0, 1)
+        return await real(c, point, **kwargs)
+
+    monkeypatch.setattr(walk, "walk_point", unfocused_first)
+    nav = navigate.Navigator(client)
+    assert asyncio.run(nav.walk_in_zone((1920.0, 960.0, 0.0), why="test")) in ("reached", "left zone")
+    assert not any(navigate._trouble.values())  # no stuck spot remembered
+
+
+def test_a_walk_whose_keys_never_arrive_says_so(world, monkeypatch):
+    client = world.client()
+
+    async def frozen(c, point, **kwargs):
+        return walk.WalkResult("stuck", 500, 500, 0, 1)
+
+    monkeypatch.setattr(walk, "walk_point", frozen)
+    monkeypatch.setattr(walk, "keys_for", lambda c: SimpleNamespace(hold=_noop))
+    monkeypatch.setattr(walk, "KEYS_WAIT", 0.1)
+    monkeypatch.setattr(walk, "request_focus", lambda why: False)
+    nav = navigate.Navigator(client)
+    assert asyncio.run(nav.walk_in_zone((1920.0, 960.0, 0.0), why="test")) == "no keys"
