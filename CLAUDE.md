@@ -219,7 +219,11 @@ Updated after the 10-10 live runs (these supersede the line above):
   `labelScrollPage`, `sellAction`, `AllAction`; then
   `QuickSellConfirmationWindow` (`TotalNumber`, `PetNumber`, `SellButton`)
   and `QuickSellWaitingWindow` (names from `_Shared-WorldData.wad` GUI
-  files). Ticks only names new this run (LootBook); Select All only when the
+  files). Each view first gets a category ticked (`selling.CATEGORIES`:
+  gear "All", housing categories except Seed, jewels): the list shows only
+  the ticked one and the game keeps the last. 10-21 03:16 (run
+  20261020-191433-seeds, 459 fights) opened on one treasure card, none of 80
+  new items was listed, 0 sold, and the run stopped at 198/200. Ticks only names new this run (LootBook); Select All only when the
   rows have no names and number no more than this run's new gear. Unverified
   live: whether rows carry a readable name. The first open writes
   `quick_sell_window.txt` to the run folder.

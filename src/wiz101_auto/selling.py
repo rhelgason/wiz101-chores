@@ -31,6 +31,23 @@ ROWS = 10  # shoplist0..9 (the item) beside num0..9 (its Selected box)
 MAX_PAGES = 40
 MAX_SALES = 60
 VIEWS = ("BackpackStuff", "HousingStuff", "JewelStuff")  # gear first; Select All only there
+# The list shows only the ticked category of the view (QuickSell.gui), and the
+# game keeps whichever was ticked last. 10-21 03:16: it opened listing one
+# treasure card, none of the run's 80 new items was on it, and nothing sold.
+CATEGORIES = {
+    "BackpackStuff": ("ShopCategory_All",),
+    # Not ShopCategory_Seed: the couch potatoes are seeds.
+    "HousingStuff": (
+        "ShopCategory_PlantLife",
+        "ShopCategory_WallHangings",
+        "ShopCategory_WallpaperCarpet",
+        "ShopCategory_Outdoor",
+        "ShopCategory_Furniture",
+        "ShopCategory_Decoration",
+        "ShopCategory_MusicScroll",
+    ),
+    "JewelStuff": ("ShopCategory_Jewel",),
+}
 
 # Category buttons. Clicking one selects a whole class, including old items.
 _BULK = {
@@ -357,18 +374,37 @@ async def _open_quick_sell(client) -> bool:
 
 
 async def _sell_view(client, view: str, remaining: Counter[str], gear: int) -> int:
-    """Sell from one view (gear, housing, jewels). Returns how many sales went through."""
+    """Sell from one view (gear, housing, jewels), category by category. Returns sales."""
     from . import ui
 
-    window = await _sell_window(client)
-    if window is None:
+    if await _sell_window(client) is None:
         return 0
-    switch = await _visible(client, f"NextCategory_{view}")
-    if switch is not None and view != VIEWS[0]:
+    if view != VIEWS[0]:
+        switch = await _visible(client, f"NextCategory_{view}")
+        if switch is None:
+            logger.info(f"sell: no way to the {view} view")
+            return 0
         await ui.click_center(client, switch)
         await asyncio.sleep(0.8)
-    elif view != VIEWS[0]:
-        return 0  # no way to that view; gear is what fills the bag
+    sales = 0
+    for category in CATEGORIES[view]:
+        if not any(count > 0 for count in remaining.values()):
+            break
+        button = await _visible(client, category)
+        if button is None:
+            logger.info(f"sell: no {category} in Quick Sell")
+            continue
+        await ui.click_center(client, button)
+        await asyncio.sleep(0.8)
+        bulk = gear if category == "ShopCategory_All" else 0
+        sales += await _sell_listed(client, category, remaining, bulk)
+        if await _fighting(client):
+            break
+    return sales
+
+
+async def _sell_listed(client, category: str, remaining: Counter[str], gear: int) -> int:
+    """Tick this run's rows in the list as it is shown, page by page, and sell them."""
     sales = 0
     for _ in range(MAX_SALES):
         if await _fighting(client):
@@ -380,11 +416,13 @@ async def _sell_view(client, view: str, remaining: Counter[str], gear: int) -> i
         page = await _page_rows(window)
         labels = [label for label, _item, _box in page]
         if page and not any(labels):
-            if view != VIEWS[0] or sales:
+            if category != "ShopCategory_All" or sales:
                 return sales
             return await _select_all(client, window, gear)
         ticked = 0
+        seen = 0
         for _page in range(MAX_PAGES):
+            seen += len(page)
             picks = pick_rows([label for label, _i, _b in page], remaining)
             for row in picks:
                 if await _tick(client, page[row][1], page[row][2]):
@@ -392,6 +430,8 @@ async def _sell_view(client, view: str, remaining: Counter[str], gear: int) -> i
             if ticked or not await _next_page(client, window):
                 break
             page = await _page_rows(window)
+        logger.info(f"sell: {category}: {seen} row(s) looked at, {ticked} ticked")
+        blackbox.event("quick_sell_list", category=category, rows=seen, ticked=ticked)
         if not ticked:
             return sales
         if not await _sell_selected(client, window, ticked, by_name=True):

@@ -78,3 +78,70 @@ def test_the_games_summary_must_agree_and_never_hold_a_pet():
     assert not confirmation_ok(2, 1, 3, by_name=True)
     assert confirmation_ok(None, None, 3, by_name=True)
     assert not confirmation_ok(None, None, 3, by_name=False)
+
+
+def test_each_view_shows_its_categories_before_rows_are_read(monkeypatch):
+    """10-21 03:16: Quick Sell opened on whatever category was ticked last (one
+    treasure card), none of the 80 new items was listed, and nothing sold."""
+    import asyncio
+    from collections import Counter
+
+    from wiz101_auto import selling, ui
+
+    shown = {"list": ["Haze Over Barkingham Cards"]}
+    lists = {
+        "ShopCategory_All": ["Hallowed Hood", "Old Robe", "Hallowed Hood"],
+        "ShopCategory_Jewel": ["Cracked Damage Ruby +2"],
+        "ShopCategory_Seed": ["Couch Potato"],
+    }
+    clicked, sold = [], []
+
+    async def visible(client, name):
+        return name
+
+    async def click(client, target):
+        clicked.append(target)
+        if target in lists:
+            shown["list"] = list(lists[target])
+        elif target.startswith("ShopCategory_"):
+            shown["list"] = []
+
+    async def window(client):
+        return "buyWindow"
+
+    async def rows(win):
+        return [(label, label, None) for label in shown["list"]]
+
+    async def tick(client, item, box):
+        return True
+
+    async def sell(client, win, ticked, *, by_name):
+        sold.append(ticked)
+        shown["list"] = [label for label in shown["list"] if label == "Old Robe"]
+        return True
+
+    async def nothing(*_a, **_k):
+        return False
+
+    monkeypatch.setattr(selling, "_visible", visible)
+    monkeypatch.setattr(ui, "click_center", click)
+    monkeypatch.setattr(selling, "_sell_window", window)
+    monkeypatch.setattr(selling, "_page_rows", rows)
+    monkeypatch.setattr(selling, "_tick", tick)
+    monkeypatch.setattr(selling, "_sell_selected", sell)
+    monkeypatch.setattr(selling, "_next_page", nothing)
+    monkeypatch.setattr(selling, "_first_page", nothing)
+    monkeypatch.setattr(selling, "_fighting", nothing)
+    monkeypatch.setattr(selling.asyncio, "sleep", nothing)
+    remaining = Counter({"hallowed hood": 2, "cracked damage ruby +2": 1})
+
+    async def run():
+        total = 0
+        for view in selling.VIEWS:
+            total += await selling._sell_view(None, view, remaining, 0)
+        return total
+
+    assert asyncio.run(run()) == 2
+    assert sold == [2, 1]
+    assert "ShopCategory_Seed" not in clicked
+    assert not any(remaining.values())
