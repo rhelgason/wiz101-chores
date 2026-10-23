@@ -224,9 +224,20 @@ Updated after the 10-10 live runs (these supersede the line above):
   the ticked one and the game keeps the last. 10-21 03:16 (run
   20261020-191433-seeds, 459 fights) opened on one treasure card, none of 80
   new items was listed, 0 sold, and the run stopped at 198/200. Ticks only names new this run (LootBook); Select All only when the
-  rows have no names and number no more than this run's new gear. Unverified
-  live: whether rows carry a readable name. The first open writes
+  rows have no names and number no more than this run's new gear. Rows do
+  carry names (10-23 dump: "Bodkin of Fury"). The first open writes
   `quick_sell_window.txt` to the run folder.
+  10-23 (run 20261022-190354-seeds, 460 fights, 7 h): 9 passes looked at all
+  270 rows and ticked 0: wizwalker's `maybe_checked` (offset 1028, a
+  SpellCheckBox's) read every box unchecked, and `_tick` then clicked the row
+  too. Now one click on the box, never the row after; a tick that does not
+  read checked counts as "unread" and the sale then needs the confirm box's
+  `TotalNumber` to agree. The first tick logs which box bytes changed
+  (`checkbox_probe`) to find the real flag. 8 of 9 passes had a boar duel
+  start within ~20s at the camp (the list kept paging, the duel unplayed):
+  `_sell_listed` stops on a fight each page, and a full bag is sold in
+  Northguard (`SeedFarm.sell_away`: trip, sell, mana, Recall); a mana trip
+  sells when the bag is within `SELL_AHEAD` (20) of full.
 - The couch potato count now reads the bag (every 5 fights); before 10-11 it
   read a state file only the drops hook updated, so it said 0 all night.
 - Fights: `farm.plan_round` — drain when hurt and Scarecrow can't go;
@@ -267,7 +278,7 @@ Updated after the 10-10 live runs (these supersede the line above):
   WizardClient.log lines and stops the run on `MSG_Disconnect` or a
   `GUI_Connection` message box (not AppCloseConnection: every zone change logs
   it); a 0-move pull waits for keys (`walk.wait_for_keys`); crashwatch's focus
-  log now checks the frontmost app (exit 0 of the raise said "ok" 100 times
+  log now checks the frontmost app (its AppleScript did not parse until 10-23; exit 0 of the raise said "ok" 100 times
   while no key arrived). Other "short" runs (10-17..10-22) were stopped by
   the player while farming; 10-17 07:43 was the Mac sleeping at 1% battery.
 - 10-13 10:58: another player joined fight 67; the game's "Endorse a Wizard"
