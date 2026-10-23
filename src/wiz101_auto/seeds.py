@@ -663,7 +663,7 @@ class SeedFarm:
     async def pull(self, entity, row: Seen) -> bool:
         """Walk onto the creature, then wait for the duel. True when one started."""
         from .farm import in_fight, mark_mob_contact
-        from .walk import walk_to
+        from .walk import KEYS_MOVED, wait_for_keys, walk_to
 
         async def target():
             try:
@@ -685,6 +685,10 @@ class SeedFarm:
         )
         if result.outcome in ("lost",):
             return await in_fight(self.client)
+        if result.outcome in ("stuck", "timeout") and result.moved < KEYS_MOVED:
+            # 10-22: pulls moved 0 for ~35 min (keys not reaching the game) and the
+            # server logged the wizard out for inactivity. Ask for focus and wait.
+            await wait_for_keys(self.client, why="pulling")
         # Only a walk that ended on the creature can still turn into a duel.
         touched = result.outcome in ("reached", "fight") or result.end_dist <= CONTACT
         if touched:

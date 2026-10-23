@@ -259,6 +259,17 @@ Updated after the 10-10 live runs (these supersede the line above):
   the bot waited 2 h ("in a dialogue or a loading screen"). Now a wait over
   `STUCK_BUSY` (5 min) logs a warning and a `needs_player` notification.
   bot.log times run 1 h ahead of the Mac clock.
+- 10-22 (run 20261022-161220-seeds): pulls moved 0 from the start (keys not
+  reaching the game; boars walked into the standing wizard for 20 duels),
+  then none for 15 min, then the server sent MSG_Disconnect_Afk ("disconnected
+  due to inactivity") and the bot waited for boars at the login screen for 2 h.
+  Now `gamelog.LogWatch` (heartbeat loop, every mode) reads new
+  WizardClient.log lines and stops the run on `MSG_Disconnect` or a
+  `GUI_Connection` message box (not AppCloseConnection: every zone change logs
+  it); a 0-move pull waits for keys (`walk.wait_for_keys`); crashwatch's focus
+  log now checks the frontmost app (exit 0 of the raise said "ok" 100 times
+  while no key arrived). Other "short" runs (10-17..10-22) were stopped by
+  the player while farming; 10-17 07:43 was the Mac sleeping at 1% battery.
 - 10-13 10:58: another player joined fight 67; the game's "Endorse a Wizard"
   window (`EndorsementWindow`) came up and held the wizard still in Northguard
   for 27 min (every walk moved 0, Recall did nothing). `ui.close_endorsement`

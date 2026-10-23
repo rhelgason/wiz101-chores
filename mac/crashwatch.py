@@ -329,6 +329,23 @@ def player_message(row: dict) -> str:
 FOCUS_REQUEST = ROOT / "state" / "focus.request"
 
 
+def frontmost_check(pid: int) -> str:
+    """'ok' when that process is the active app, else what is."""
+    time.sleep(0.5)
+    script = (
+        'tell application "System Events" to set p to first process whose frontmost is true\n'
+        'return (unix id of p as text) & " " & (name of p)'
+    )
+    try:
+        done = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=10)
+    except Exception as exc:
+        return f"asked; frontmost unknown ({exc})"
+    front = done.stdout.strip()
+    if front.split(" ")[0] == str(pid):
+        return "ok"
+    return f"asked, but the frontmost app is {front or 'unknown'}"
+
+
 def bring_forward(pids: list[int], run_dir: Path) -> str:
     """Make the Wizard101 game process the active Mac app (System Events; needs Accessibility)."""
     if not pids:
@@ -340,6 +357,9 @@ def bring_forward(pids: list[int], run_dir: Path) -> str:
     try:
         done = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=10)
         result = "ok" if done.returncode == 0 else (done.stderr.strip() or f"exit {done.returncode}")
+        if result == "ok":
+            # Exit 0 only says the request ran (10-22: 100 "ok"s while no key arrived).
+            result = frontmost_check(pids[0])
     except Exception as exc:
         result = str(exc)
     with (run_dir / "focus.log").open("a", encoding="utf-8") as f:

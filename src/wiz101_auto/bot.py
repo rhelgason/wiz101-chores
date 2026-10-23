@@ -470,10 +470,19 @@ def game_gone(controller: Controller, times: int) -> bool:
 
 async def heartbeat_loop(client, controller: Controller, task: dict):
     """status.json every 5s, and a state line in events.jsonl every HEARTBEAT seconds."""
+    from .gamelog import LogWatch
     from .service import write_status
 
     last_beat = 0.0
+    game_log = LogWatch()
     while not controller.stopped.is_set():
+        dropped = game_log.poll()
+        if dropped:
+            logger.warning(f"the game server logged the wizard out: {dropped}")
+            why = "the game logged out (log back in, then start the bot)"
+            blackbox.event("needs_player", why=why, line=dropped)
+            controller.stop("the game server logged the wizard out")
+            return
         zone = ""
         with contextlib.suppress(Exception):
             zone = await client.zone_name() or ""
