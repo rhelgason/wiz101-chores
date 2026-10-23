@@ -145,3 +145,68 @@ def test_each_view_shows_its_categories_before_rows_are_read(monkeypatch):
     assert sold == [2, 1]
     assert "ShopCategory_Seed" not in clicked
     assert not any(remaining.values())
+
+
+def test_a_tick_clicks_its_box_once_even_when_the_box_reads_unchecked(monkeypatch):
+    """10-23: every box read unchecked (a SpellCheckBox offset), the row was
+    clicked too, and 270 rows a pass gave 0 sales."""
+    import asyncio
+
+    from wiz101_auto import selling, ui
+
+    clicks = []
+
+    class Box:
+        async def maybe_checked(self):
+            return False
+
+        async def read_base_address(self):
+            raise RuntimeError("no memory here")
+
+    async def click(client, target):
+        clicks.append(target)
+
+    async def nothing(*_a):
+        return None
+
+    box = Box()
+    monkeypatch.setattr(ui, "click_center", click)
+    monkeypatch.setattr(selling.asyncio, "sleep", nothing)
+    assert asyncio.run(selling._tick(None, "row", box)) is None
+    assert clicks == [box]
+
+
+def test_unread_ticks_need_the_games_count_to_sell(monkeypatch):
+    import asyncio
+
+    from wiz101_auto import selling
+
+    calls = []
+
+    async def window(client):
+        return "buyWindow"
+
+    async def rows(win):
+        return [("Hallowed Hood", "row", "box")]
+
+    async def unread(client, item, box):
+        return None
+
+    async def sell(client, win, ticked, *, by_name):
+        calls.append((ticked, by_name))
+        return False
+
+    async def nothing(*_a, **_k):
+        return False
+
+    monkeypatch.setattr(selling, "_sell_window", window)
+    monkeypatch.setattr(selling, "_page_rows", rows)
+    monkeypatch.setattr(selling, "_tick", unread)
+    monkeypatch.setattr(selling, "_sell_selected", sell)
+    monkeypatch.setattr(selling, "_first_page", nothing)
+    monkeypatch.setattr(selling, "_next_page", nothing)
+    monkeypatch.setattr(selling, "_fighting", nothing)
+    monkeypatch.setattr(selling.blackbox, "event", lambda *a, **k: None)
+    asyncio.run(selling._sell_listed(None, "ShopCategory_All", Counter({"hallowed hood": 1}), 0))
+    assert calls == [(1, False)]
+    assert not confirmation_ok(None, None, 1, by_name=False)

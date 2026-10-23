@@ -242,3 +242,37 @@ def test_a_failed_walk_far_from_the_camp_does_not_make_home_there(monkeypatch):
     farm.where = where
     asyncio.run(farm.settle(far))
     assert farm.home is None and farm.camp_fails == 1
+
+
+def test_a_full_bag_is_sold_in_northguard_not_at_the_camp(monkeypatch):
+    """10-23: 8 of 9 sales at Boar Camp had a boar walk in within ~20s."""
+    from wiz101_auto import navigate, seeds, selling
+
+    cfg = SimpleNamespace(hunts=[], leash=4500.0, northguard_trips=True)
+    farm = seeds.SeedFarm(client=None, controller=None, task={}, cfg=cfg)
+    assert farm.hunt.refill
+    trips, done = [], []
+
+    async def trip(client, dest, home, errand, **_k):
+        trips.append((dest, home))
+        await errand()
+        return True
+
+    async def sell(*_a):
+        done.append("sold")
+        return True
+
+    async def gather(need, strict=False):
+        done.append(need)
+
+    monkeypatch.setattr(navigate, "trip", trip)
+    monkeypatch.setattr(selling, "quick_sell", sell)
+    farm.gather = gather
+    assert asyncio.run(farm.sell_away()) is True
+    assert trips == [(farm.hunt.refill, farm.hunt.zone)] and done == ["sold", "mana"]
+
+    farm.zone = farm.hunt.refill  # already there: sell in place
+    assert asyncio.run(farm.sell_away()) is None
+    farm.zone = farm.hunt.zone
+    farm.cfg.northguard_trips = False
+    assert asyncio.run(farm.sell_away()) is None

@@ -332,9 +332,14 @@ FOCUS_REQUEST = ROOT / "state" / "focus.request"
 def frontmost_check(pid: int) -> str:
     """'ok' when that process is the active app, else what is."""
     time.sleep(0.5)
+    # Not "return (unix id of p as text)": AppleScript fails to parse it (10-23: every check said "unknown").
     script = (
-        'tell application "System Events" to set p to first process whose frontmost is true\n'
-        'return (unix id of p as text) & " " & (name of p)'
+        'tell application "System Events"\n'
+        "set p to first application process whose frontmost is true\n"
+        "set u to unix id of p\n"
+        "set n to name of p\n"
+        "end tell\n"
+        'return (u as text) & " " & n'
     )
     try:
         done = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=10)

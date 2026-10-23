@@ -420,21 +420,27 @@ async def _sell_listed(client, category: str, remaining: Counter[str], gear: int
                 return sales
             return await _select_all(client, window, gear)
         ticked = 0
+        unsure = 0
         seen = 0
         for _page in range(MAX_PAGES):
+            if await _fighting(client):
+                return sales  # a mob walked in: stop clicking; the fight comes first
             seen += len(page)
             picks = pick_rows([label for label, _i, _b in page], remaining)
             for row in picks:
-                if await _tick(client, page[row][1], page[row][2]):
+                state = await _tick(client, page[row][1], page[row][2])
+                if state is not False:
                     ticked += 1
+                    unsure += state is None
             if ticked or not await _next_page(client, window):
                 break
             page = await _page_rows(window)
-        logger.info(f"sell: {category}: {seen} row(s) looked at, {ticked} ticked")
-        blackbox.event("quick_sell_list", category=category, rows=seen, ticked=ticked)
+        logger.info(f"sell: {category}: {seen} row(s) looked at, {ticked} ticked ({unsure} unread)")
+        blackbox.event("quick_sell_list", category=category, rows=seen, ticked=ticked, unread=unsure)
         if not ticked:
             return sales
-        if not await _sell_selected(client, window, ticked, by_name=True):
+        # A tick whose box could not be read needs the game's own count to agree.
+        if not await _sell_selected(client, window, ticked, by_name=not unsure):
             return sales
         sales += 1
     return sales
@@ -549,20 +555,58 @@ async def _row_label(item) -> str:
     return ""
 
 
-async def _tick(client, item, box) -> bool:
+PROBE_SIZE = 0x600  # bytes of a Selected box compared before and after its first click
+_probed = False
+
+
+async def _tick(client, item, box) -> bool | None:
+    """Click a row's Selected box once (the row itself when it has none).
+
+    True when the box reads checked afterwards; None when the click went in
+    but the state is unknown. wizwalker's `maybe_checked` is the battle
+    SpellCheckBox's offset: on 10-23 (run 20261022-190354-seeds) every tick
+    read unchecked, the row was then clicked too (likely unticking it), and
+    270 rows a pass gave 0 sales for 40 minutes. The box is never clicked twice.
+    """
     from . import ui
 
-    for target in (box, item):
-        if target is None:
-            continue
-        try:
-            await ui.click_center(client, target)
-            await asyncio.sleep(0.25)
-            if box is None or await box.maybe_checked():
-                return True
-        except Exception:
-            continue
-    return False
+    target = box if box is not None else item
+    try:
+        before = await _probe_bytes(box)
+        await ui.click_center(client, target)
+        await asyncio.sleep(0.25)
+        if box is None:
+            return None
+        await _probe_report(box, before)
+        return True if await box.maybe_checked() else None
+    except Exception as exc:
+        logger.debug(f"sell: tick failed: {exc}")
+        return False
+
+
+async def _probe_bytes(box) -> bytes | None:
+    return None if _probed or box is None else await _box_bytes(box)
+
+
+async def _box_bytes(box) -> bytes | None:
+    try:
+        return await box.read_bytes(await box.read_base_address(), PROBE_SIZE)
+    except Exception:
+        return None
+
+
+async def _probe_report(box, before: bytes | None) -> None:
+    """Log which bytes of the box the first click changed (to learn its checked flag)."""
+    global _probed
+    if before is None or _probed:
+        return
+    _probed = True
+    after = await _box_bytes(box)
+    if after is None:
+        return
+    changed = [(i, before[i], after[i]) for i in range(min(len(before), len(after))) if before[i] != after[i]]
+    logger.info(f"sell: the first tick changed {len(changed)} byte(s) of its box: {changed[:16]}")
+    blackbox.event("checkbox_probe", changed=changed[:32])
 
 
 async def _first_page(client, window) -> None:

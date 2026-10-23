@@ -47,6 +47,7 @@ HEALTH_LOW = 0.40  # out of a fight; in a fight the death drain covers 60%
 HEALTH_READY = 0.65
 BAG_FREE = 2
 BAG_EVERY = 60.0  # seconds between backpack reads
+SELL_AHEAD = 20  # a Northguard trip for mana also sells when the bag is this close to full
 SEED_COUNT_EVERY = 5  # fights between couch potato counts (a read of the whole bag)
 FIGHT_WAIT = 14.0  # the duel showed up about 11s after contact (23:34 session)
 SKIP_AFTER_MISS = 30.0
@@ -832,7 +833,10 @@ class SeedFarm:
 
             self.task["name"] = "quick selling"
             logger.info(f"seeds: the backpack is at {used}/{capacity}; quick selling this run's loot")
-            if await quick_sell(self.client, self.controller, self.book):
+            sold = await self.sell_away()
+            if sold is None:
+                sold = await quick_sell(self.client, self.controller, self.book)
+            if sold:
                 logger.info("seeds: sold; back to the hunt")
                 return False
             if await self._fight_now():
@@ -846,6 +850,51 @@ class SeedFarm:
         blackbox.event("needs_player", why="backpack full", used=int(used), capacity=int(capacity))
         self.controller.stop("the backpack is full")
         return True
+
+    async def sell_away(self) -> bool | None:
+        """Quick Sell in the refill zone (Northguard), not at the camp, and refill there too.
+
+        10-23 (run 20261022-190354-seeds): 8 of 9 sales at Boar Camp had a boar
+        walk into the wizard within ~20s of opening the list. None when there
+        is no trip to make (or it could not leave): the caller sells in place.
+        """
+        from .navigate import trip
+        from .selling import quick_sell
+
+        if not (self.cfg.northguard_trips and self.hunt.refill) or self.zone == self.hunt.refill:
+            return None
+        sold = [False]
+
+        async def errand() -> None:
+            sold[0] = await quick_sell(self.client, self.controller, self.book)
+            await self.gather("mana")
+
+        logger.info(f"seeds: selling in {zone_title(self.hunt.refill)}, away from the boars")
+        went = await trip(
+            self.client,
+            self.hunt.refill,
+            self.zone,
+            errand,
+            controller=self.controller,
+            on_fight=getattr(self.client, "_on_fight", None),
+        )
+        return sold[0] if went else None
+
+    async def sell_ahead(self) -> None:
+        """On a refill trip: sell now if the bag is close to full, rather than make a trip for it later."""
+        if not (self.cfg.sell and self.book.selling):
+            return
+        try:
+            used, capacity = await self.client.backpack_space()
+        except Exception as exc:
+            _reraise_closed(exc)
+            return
+        if int(used) < int(capacity) - SELL_AHEAD:
+            return
+        from .selling import quick_sell
+
+        logger.info(f"seeds: the backpack is at {used}/{capacity}; selling while here")
+        await quick_sell(self.client, self.controller, self.book)
 
     async def recover(self, need: str, strict: bool = False) -> None:
         """A potion, a wisp in reach, or standing still, until `need` is back."""
@@ -882,6 +931,7 @@ class SeedFarm:
 
         async def errand() -> None:
             await self.gather(need, strict)
+            await self.sell_ahead()
 
         went = await trip(
             self.client,
