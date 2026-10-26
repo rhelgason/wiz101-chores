@@ -238,6 +238,16 @@ Updated after the 10-10 live runs (these supersede the line above):
   `_sell_listed` stops on a fight each page, and a full bag is sold in
   Northguard (`SeedFarm.sell_away`: trip, sell, mana, Recall); a mana trip
   sells when the bag is within `SELL_AHEAD` (20) of full.
+  10-26 (run 20261025-231646-seeds, 643 fights, 10 h): selling works (6 rows
+  ticked, the summary agreed, potatoes kept), but the game closes the list
+  after each sale and a pass ended there: 6 of ~148 items sold, so a trip
+  every ~40 min. `quick_sell` now runs `_sell_round` again (`MAX_ROUNDS`)
+  until one sells nothing; still one page per Sell (unknown whether ticks
+  survive a page turn). The probe flipped byte 1036 0->1: `CHECKED_AT`.
+  The run ended on a flee during the sell trip: its load to Northguard hung
+  (ConnectComplete, AppCloseConnection state 5, nothing more; the transient
+  freeze) and `world.wait_for_loading` waited silently 74 min until the game
+  closed. It now warns and sends `needs_player` after `LOADING_TELL` (5 min).
 - The couch potato count now reads the bag (every 5 fights); before 10-11 it
   read a state file only the drops hook updated, so it said 0 all night.
 - Fights: `farm.plan_round` — drain when hurt and Scarecrow can't go;

@@ -456,3 +456,23 @@ def test_a_walk_whose_keys_never_arrive_says_so(world, monkeypatch):
     monkeypatch.setattr(walk, "request_focus", lambda why: False)
     nav = navigate.Navigator(client)
     assert asyncio.run(nav.walk_in_zone((1920.0, 960.0, 0.0), why="test")) == "no keys"
+
+
+def test_a_loading_screen_that_never_ends_tells_the_player(monkeypatch):
+    """10-26: a flee's load to Northguard hung and the bot waited silently for 74 min."""
+    import asyncio
+
+    from wiz101_auto import world
+
+    told = []
+    polls = {"n": 0}
+
+    class Client:
+        async def is_loading(self):
+            polls["n"] += 1
+            return polls["n"] < 8
+
+    monkeypatch.setattr(world, "LOADING_TELL", 0.0)
+    monkeypatch.setattr(world.blackbox, "event", lambda kind, **k: told.append((kind, k)))
+    asyncio.run(world.wait_for_loading(Client(), appear_timeout=0.0))
+    assert [kind for kind, _k in told] == ["needs_player"]

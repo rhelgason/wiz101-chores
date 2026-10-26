@@ -30,6 +30,7 @@ from .garden import is_couch_potato
 ROWS = 10  # shoplist0..9 (the item) beside num0..9 (its Selected box)
 MAX_PAGES = 40
 MAX_SALES = 60
+MAX_ROUNDS = 40  # Quick Sell opened again after each sale (the game closes it)
 VIEWS = ("BackpackStuff", "HousingStuff", "JewelStuff")  # gear first; Select All only there
 # The list shows only the ticked category of the view (QuickSell.gui), and the
 # game keeps whichever was ticked last. 10-21 03:16: it opened listing one
@@ -296,24 +297,49 @@ def _potato_count(items: list[BagItem]) -> int:
 
 async def quick_sell(client, controller, book: LootBook) -> bool:
     """Sell this run's loot through the backpack's Quick Sell. True when the
-    bag has room again."""
+    bag has room again.
+
+    The game closes the list after each sale. 10-26 (run 20261025-231646-seeds):
+    every pass sold one page (6 of ~148 new items) and the bag was full again
+    within the hour. Now the list is opened again until a pass sells nothing.
+    """
     from .seeds import bag_is_full
 
     if book.baseline is None:
         logger.info("sell: the bag was never read; not selling")
         return False
-    if controller:
-        controller.allow_idle(300)
+    sold = 0
+    for _ in range(MAX_ROUNDS):
+        if controller:
+            controller.allow_idle(300)
+        try:
+            made = await _sell_round(client, book)
+        finally:
+            if controller:
+                controller.end_idle()
+        sold += made or 0
+        if not made or not book.selling or await _fighting(client):
+            break
+    logger.info(f"sell: {sold} sale(s) made")
+    try:
+        used, capacity = await client.backpack_space()
+    except Exception:
+        return False
+    return not bag_is_full(int(used), int(capacity))
+
+
+async def _sell_round(client, book: LootBook) -> int | None:
+    """Open Quick Sell, sell what this run brought, close it. Sales made, or None."""
     try:
         before = await _backpack(client)
         equipped_ids, equipped_names = await _equipped(client)
         if before is None:
-            return False
+            return None
         wanted = names_to_sell(book.baseline, before, equipped_names)
         gear = new_gear(book.baseline, before)
         if not wanted:
             logger.info("sell: everything in the bag was there before this run; nothing is sold")
-            return False
+            return None
         potatoes = _potato_count(before)
         gold = await _gold(client)
         logger.info(
@@ -324,7 +350,7 @@ async def quick_sell(client, controller, book: LootBook) -> bool:
         if not await _open_quick_sell(client):
             logger.info("sell: Quick Sell did not open; the windows are in quick_sell_window.txt")
             await _dump(client, "quick_sell_window.txt")
-            return False
+            return None
         if not book.dumped:
             book.dumped = True
             await _dump(client, "quick_sell_window.txt")
@@ -337,17 +363,10 @@ async def quick_sell(client, controller, book: LootBook) -> bool:
                 break
     finally:
         await _close(client)
-        if controller:
-            controller.end_idle()
     if sold and not await _sale_was_safe(client, book, equipped_ids, potatoes, gold):
         book.selling = False
         logger.warning("sell: the sale touched something else; no more selling this run")
-    logger.info(f"sell: {sold} sale(s) made")
-    try:
-        used, capacity = await client.backpack_space()
-    except Exception:
-        return False
-    return not bag_is_full(int(used), int(capacity))
+    return sold
 
 
 async def _open_quick_sell(client) -> bool:
@@ -433,7 +452,7 @@ async def _sell_listed(client, category: str, remaining: Counter[str], gear: int
                     ticked += 1
                     unsure += state is None
             if ticked or not await _next_page(client, window):
-                break
+                break  # one page per Sell: whether ticks survive a page turn is unknown
             page = await _page_rows(window)
         logger.info(f"sell: {category}: {seen} row(s) looked at, {ticked} ticked ({unsure} unread)")
         blackbox.event("quick_sell_list", category=category, rows=seen, ticked=ticked, unread=unsure)
@@ -578,9 +597,19 @@ async def _tick(client, item, box) -> bool | None:
         if box is None:
             return None
         await _probe_report(box, before)
-        return True if await box.maybe_checked() else None
+        return True if await _box_checked(box) else None
     except Exception as exc:
         logger.debug(f"sell: tick failed: {exc}")
+        return False
+
+
+CHECKED_AT = 1036  # 10-26 probe: the first click flipped this byte 0 -> 1 (not wizwalker's 1028)
+
+
+async def _box_checked(box) -> bool:
+    try:
+        return bool((await box.read_bytes(await box.read_base_address() + CHECKED_AT, 1))[0])
+    except Exception:
         return False
 
 

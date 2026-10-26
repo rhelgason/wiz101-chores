@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import asyncio
 
-from . import ui
+from loguru import logger
+
+from . import blackbox, ui
+
+LOADING_TELL = 300.0  # a loading screen this long: tell the player (it does not end by waiting)
 
 
 async def is_free(client) -> bool:
@@ -38,5 +42,18 @@ async def wait_for_loading(client, appear_timeout: float = 2.0):
     end = loop.time() + appear_timeout
     while loop.time() < end and not await client.is_loading():
         await asyncio.sleep(0.1)
+    started = loop.time()
+    told = False
     while await client.is_loading():
+        if not told and loop.time() - started >= LOADING_TELL:
+            # 10-26 08:05 (run 20261025-231646-seeds): a flee's load to Northguard
+            # logged ConnectComplete, AppCloseConnection state 5, then nothing;
+            # the bot waited here silently for 74 min until the game closed.
+            told = True
+            minutes = round(LOADING_TELL / 60)
+            logger.warning(f"world: a loading screen has not ended in {minutes} min; the game may be frozen")
+            blackbox.event(
+                "needs_player",
+                why=f"a loading screen has not ended in {minutes} min (restart the game, then the bot)",
+            )
         await asyncio.sleep(0.2)

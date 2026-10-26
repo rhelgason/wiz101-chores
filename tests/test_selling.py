@@ -210,3 +210,31 @@ def test_unread_ticks_need_the_games_count_to_sell(monkeypatch):
     asyncio.run(selling._sell_listed(None, "ShopCategory_All", Counter({"hallowed hood": 1}), 0))
     assert calls == [(1, False)]
     assert not confirmation_ok(None, None, 1, by_name=False)
+
+
+def test_quick_sell_opens_the_list_again_after_each_sale(monkeypatch):
+    """10-26: the game closes the list after a sale; each pass sold one page."""
+    import asyncio
+
+    from wiz101_auto import selling
+
+    rounds = iter([1, 1, 0, 1])
+    calls = []
+
+    async def one_round(client, book):
+        calls.append(1)
+        return next(rounds)
+
+    async def nothing(*_a):
+        return False
+
+    class Client:
+        async def backpack_space(self):
+            return 150, 200
+
+    book = selling.LootBook()
+    book.baseline = set()
+    monkeypatch.setattr(selling, "_sell_round", one_round)
+    monkeypatch.setattr(selling, "_fighting", nothing)
+    assert asyncio.run(selling.quick_sell(Client(), None, book)) is True
+    assert len(calls) == 3
