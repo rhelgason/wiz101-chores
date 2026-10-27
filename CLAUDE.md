@@ -248,6 +248,16 @@ Updated after the 10-10 live runs (these supersede the line above):
   (ConnectComplete, AppCloseConnection state 5, nothing more; the transient
   freeze) and `world.wait_for_loading` waited silently 74 min until the game
   closed. It now warns and sends `needs_player` after `LOADING_TELL` (5 min).
+- 10-26 22:43 (run 20261026-224338-seeds): keys worked all through
+  22:57-23:58 with the display off and the Mac idle (two Northguard trips);
+  they died at 23:59 a minute after the display woke and stayed dead 00:02-00:12+
+  while the fixed frontmost check said Wizard101 was in front every time. Not
+  the lock screen (unlocked), not Secure Input (no kCGSSessionSecureInputPID).
+  An app switch (Finder, then Wizard101) did not bring them back. They came
+  back only after the player had been at the Mac (a click on the window, it
+  seems). crashwatch now also tries AXRaise/AXMain on the game window
+  (`raise_window`); that needs Accessibility for Terminal, else focus.log says
+  so. Unproven that it fixes it.
 - The couch potato count now reads the bag (every 5 fights); before 10-11 it
   read a state file only the drops hook updated, so it said 0 all night.
 - Fights: `farm.plan_round` — drain when hurt and Scarecrow can't go;

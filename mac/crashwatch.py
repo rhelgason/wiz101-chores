@@ -329,6 +329,33 @@ def player_message(row: dict) -> str:
 FOCUS_REQUEST = ROOT / "state" / "focus.request"
 
 
+def raise_window(pid: int) -> str:
+    """Make the game's window the key window, not just its app the front one.
+
+    10-27 00:02-00:12 (run 20261026-224338-seeds): Wizard101 was the
+    frontmost app on every check and still no key arrived; keys came back
+    each time the player had been at the Mac (a click on the window). An app
+    switch (Finder, then Wizard101) did not bring them back. AXRaise needs
+    Accessibility for the app running crashwatch (Terminal); without it this
+    only reports that.
+    """
+    script = (
+        f'tell application "System Events" to tell (first process whose unix id is {pid})\n'
+        'perform action "AXRaise" of window 1\n'
+        'set value of attribute "AXMain" of window 1 to true\n'
+        "end tell"
+    )
+    try:
+        done = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=10)
+    except Exception as exc:
+        return f"; window raise failed ({exc})"
+    if done.returncode == 0:
+        return "; window raised"
+    if "assistive access" in done.stderr:
+        return "; window not raised (give Terminal Accessibility in System Settings)"
+    return f"; window not raised ({done.stderr.strip()[:120]})"
+
+
 def frontmost_check(pid: int) -> str:
     """'ok' when that process is the active app, else what is."""
     time.sleep(0.5)
@@ -365,6 +392,8 @@ def bring_forward(pids: list[int], run_dir: Path) -> str:
         if result == "ok":
             # Exit 0 only says the request ran (10-22: 100 "ok"s while no key arrived).
             result = frontmost_check(pids[0])
+        if result == "ok":
+            result += raise_window(pids[0])
     except Exception as exc:
         result = str(exc)
     with (run_dir / "focus.log").open("a", encoding="utf-8") as f:
