@@ -1,17 +1,10 @@
-"""The Spiral Progress numbers (spiral.py) and the tracker's readings (tracker.py)."""
+"""The Spiral Progress numbers (spiral.py) and the tracker's memory read (tracker.py)."""
 
 import asyncio
 from pathlib import Path
 
 from wiz101_auto import spiral
-from wiz101_auto.spiral import (
-    QuestMemory,
-    build,
-    canonical_world,
-    parse_quest_list,
-    parse_side_guide,
-    world_of_zone,
-)
+from wiz101_auto.spiral import Lookup, Progress, build, canonical_world, parse_quest_list, world_of_zone
 
 REPO_DOCS = Path(__file__).resolve().parent.parent / "docs"
 
@@ -22,7 +15,6 @@ INSTANCE
 SIDE ×1
 2.
 Ghost Hunters
-SIDE ×2
 MOB
 3.
 Skeleton Crew
@@ -45,47 +37,29 @@ Digging in the Dirt
 Make Some Rubbings
 """
 
-GUIDE = """Krokotopia side quests by giver.
-
-ROYAL HALL
-(MAIN QUEST)
-
-Prospector Zeke
-A Whole New World (100 XP)
-- Talk to Zeke
-
-(SIDE QUEST)
-
-Sergeant Skeets
-Sand in My Shoes (170 XP)
-- Defeat 3 Sand Snakes
-
-Captain Grubb
-Lost Lamp (55 gold, 200 XP)
-- Find the lamp
-"""
-
 
 def docs(tmp_path: Path) -> Path:
     d = tmp_path / "docs"
     (d / "quests").mkdir(parents=True)
-    (d / "sidequests").mkdir()
     (d / "quests" / "Wizard City.txt").write_text(WC, encoding="utf-8")
     (d / "quests" / "Krokotopia.txt").write_text(KT, encoding="utf-8")
-    (d / "sidequests" / "Krokotopia.txt").write_text(GUIDE, encoding="utf-8")
     return d
 
 
-def entry(name, active=False, main=False, world="Krokotopia", area="Royal Hall", goal=""):
-    return {"name": name, "active": active, "main": main, "world": world, "area": area, "goal": goal}
+def lookup(d: Path) -> Lookup:
+    return spiral.lists_and_lookup(d)[1]
 
 
-def test_parse_list_areas_tags_and_side_counts():
+def live(state: Path, t: float, **data) -> None:
+    spiral.write_json(state / spiral.LIVE_FILE, {"time": t, "state": "running", "quests_ok": True, **data})
+
+
+def test_parse_list_areas_and_tags():
     qs = parse_quest_list(WC)
     names = ["Unicorn Way", "Ghost Hunters", "Skeleton Crew", "Gone Fishing", "Last Stand"]
     assert [q.name for q in qs] == names
     assert [q.area for q in qs] == ["Unicorn Way"] * 3 + ["Triton Avenue"] * 2
-    assert qs[1].tags == ["SIDE ×2", "MOB"] and qs[1].sides == 2
+    assert qs[0].tags == ["INSTANCE", "SIDE ×1"]
 
 
 def test_a_quest_listed_again_under_its_number_is_one_quest():
@@ -94,118 +68,70 @@ def test_a_quest_listed_again_under_its_number_is_one_quest():
     assert len(qs) == 1 and qs[0].tags == ["TALK", "BOSS"]
 
 
-def test_side_guide_leaves_out_main_quests():
-    sides = parse_side_guide(GUIDE)
-    assert [(s.name, s.giver, s.area) for s in sides] == [
-        ("Sand in My Shoes", "Sergeant Skeets", "Royal Hall"),
-        ("Lost Lamp", "Captain Grubb", "Royal Hall"),
-    ]
-
-
 def test_world_names():
     assert world_of_zone("WizardCity/WC_Hub") == "Wizard City"
     assert world_of_zone("DragonSpire/DS_Hub") == "Dragonspyre"
     assert world_of_zone("Grizzleheim/GH_HFjord/GH_Something") == "Wintertusk"
     assert world_of_zone("") == ""
-    assert canonical_world("Wizard City") == "Wizard City"
     assert canonical_world("Nowhere") == ""
 
 
-def test_the_tracked_quest_that_left_the_book_is_done(tmp_path):
-    m = QuestMemory(tmp_path / "seen.json")
-    m.see_book([entry("Lost Lamp", active=True), entry("Sand in My Shoes")], 1.0)
-    m.book_closed()
-    done = m.see_book([entry("Sand in My Shoes", active=True)], 2.0)
-    assert done == ["Lost Lamp"]
-    assert m.quests["Lost Lamp"]["done"] == 2.0
-    m.save()
-    again = QuestMemory(tmp_path / "seen.json")
-    assert again.quests["Lost Lamp"]["done"] == 2.0 and again.book_active == "Sand in My Shoes"
-
-
-def test_switching_the_tracked_quest_by_hand_finishes_nothing(tmp_path):
-    m = QuestMemory(tmp_path / "seen.json")
-    m.see_book([entry("A", active=True), entry("B")], 1.0)
-    m.book_closed()
-    # Open again on page 1 (A on it), turn to page 2, track C there.
-    assert m.see_book([entry("A", active=True), entry("B")], 2.0) == []
-    assert m.see_book([entry("C", active=True)], 3.0) == []
-    assert not m.quests["A"]["done"]
-
-
-def test_a_done_quest_seen_again_is_not_done(tmp_path):
-    m = QuestMemory(tmp_path / "seen.json")
-    m.see_book([entry("A", active=True)], 1.0)
-    m.book_closed()
-    m.see_book([entry("B", active=True)], 2.0)
-    assert m.quests["A"]["done"]
-    m.book_closed()
-    m.see_book([entry("A"), entry("B", active=True)], 3.0)
-    assert m.quests["A"]["done"] is None
-    assert [e["kind"] for e in m.events][-1] == "back"
-
-
-def test_hud_name_or_a_known_goal_names_the_tracked_quest(tmp_path):
-    m = QuestMemory(tmp_path / "seen.json")
-    m.see_book([entry("Lost Lamp", goal="Find the lamp"), entry("Sand", goal="Defeat Snakes")], 1.0)
-    names = {spiral.norm("Ghost Hunters"): "Ghost Hunters"}
-    assert m.see_hud(["Ghost Hunters", "Defeat Ghosts"], "Defeat Ghosts", names, 2.0) == "Ghost Hunters"
-    assert m.tracked == "Ghost Hunters"
-    assert m.see_hud(["Find the lamp"], "Find the lamp", {}, 3.0) == "Lost Lamp"
-    assert m.tracked == "Lost Lamp"
-    # A goal two quests share names neither.
-    m.see_book([entry("Other", goal="Find the lamp")], 4.0)
-    m.tracked = ""
-    assert m.see_hud(["Find the lamp"], "Find the lamp", {}, 5.0) == ""
-
-
-def test_build_story_order_and_earlier_worlds(tmp_path):
+def test_progress_only_moves_forward_and_keeps_unlisted(tmp_path):
     d = docs(tmp_path)
-    state = tmp_path / "state"
-    m = QuestMemory(state / spiral.SEEN_FILE)
-    m.see_book([entry("Make Some Rubbings", active=True, main=True),
-                entry("Sand in My Shoes", world="Krokotopia")], 100.0)
-    m.save()
-    live = {"time": 100.0, "state": "running", "zone": "Krokotopia/KT_Hub", "goal": "Make some rubbings",
-            "tracked": "Make Some Rubbings"}
-    spiral.write_json(state / spiral.LIVE_FILE, live)
+    p = Progress(tmp_path / "progress.json", lookup(d))
+    assert p.see(["Skeleton Crew", "Some Event Quest"], 1.0) == ["Skeleton Crew"]
+    assert p.see(["Ghost Hunters"], 2.0) == []  # earlier on the list: nothing moves back
+    assert p.see(["skeleton  crew!"], 3.0) == []
+    assert p.see(["Gone Fishin"], 4.0) == ["Gone Fishing"]  # a close spelling
+    p.save()
+    again = Progress(tmp_path / "progress.json", lookup(d))
+    assert again.reached["Wizard City"]["index"] == 4
+    assert "Some Event Quest" in again.unlisted
+    assert [e["quest"] for e in again.events] == ["Skeleton Crew", "Gone Fishing"]
+
+
+def test_build_everything_before_the_story_quest_is_done(tmp_path):
+    d, state = docs(tmp_path), tmp_path / "state"
+    p = Progress(state / spiral.PROGRESS_FILE, lookup(d))
+    p.see(["Make Some Rubbings"], 100.0)
+    p.save()
+    live(state, 100.0, zone="Krokotopia/KT_Hub", goal="Find rubbings", tracked="Make Some Rubbings",
+         main=["Make Some Rubbings"])
     data = build(d, state, now=101.0)
-    assert data["running"]
+    assert data["running"] and data["read_ok"]
     worlds = {w["name"]: w for w in data["worlds"]}
     assert worlds["Wizard City"]["pct"] == 100
     kt = worlds["Krokotopia"]
     assert kt["current"] and (kt["done"], kt["total"]) == (2, 3)
-    statuses = [q["status"] for a in kt["areas"] for q in a["quests"]]
-    assert statuses == ["done", "done", "active"]
+    assert [q["status"] for a in kt["areas"] for q in a["quests"]] == ["done", "done", "active"]
     assert kt["areas"][0]["quests"][2]["tracked"]
-    sides = {s["name"]: s["status"] for s in kt["side_quests"]}
-    assert sides == {"Sand in My Shoes": "active", "Lost Lamp": "todo"}
-    assert kt["side_total"] == 2
-    assert data["current"]["world"] == "Krokotopia" and data["current"]["main"]
-    assert data["current"]["index"] == 3
+    assert data["current"]["main"] and data["current"]["index"] == 3
     assert data["story"] == {"done": 7, "total": 8, "pct": 87}
-    assert worlds["Marleybone"]["pct"] == 0 and not worlds["Marleybone"]["reached"]
+    assert not worlds["Marleybone"]["reached"]
 
 
-def test_build_stale_live_file_is_not_running(tmp_path):
-    state = tmp_path / "state"
-    live = {"time": 100.0, "state": "running", "zone": "WizardCity/WC_Hub"}
-    spiral.write_json(state / spiral.LIVE_FILE, live)
-    data = build(docs(tmp_path), state, now=100.0 + spiral.LIVE_STALE + 1)
-    assert not data["running"]
-    assert data["current"]["world"] == "Wizard City"
-
-
-def test_marks_win_and_auto_gives_back(tmp_path):
+def test_the_furthest_quest_gone_from_the_book_is_done(tmp_path):
     d, state = docs(tmp_path), tmp_path / "state"
-    spiral.set_mark(state, "Ghost Hunters", "done")
-    spiral.set_mark(state, "Lost Lamp", "done")
-    wc = next(w for w in build(d, state)["worlds"] if w["name"] == "Wizard City")
-    assert [q["status"] for q in wc["areas"][0]["quests"]] == ["todo", "done", "todo"]
-    assert wc["areas"][0]["quests"][1]["how"] == "you"
-    spiral.set_mark(state, "Ghost Hunters", "auto")
-    wc = next(w for w in build(d, state)["worlds"] if w["name"] == "Wizard City")
-    assert wc["done"] == 0
+    p = Progress(state / spiral.PROGRESS_FILE, lookup(d))
+    p.see(["Make Some Rubbings"], 100.0)
+    p.save()
+    live(state, 200.0, zone="Krokotopia/KT_Hub", tracked="", main=[])
+    kt = next(w for w in build(d, state, now=201.0)["worlds"] if w["name"] == "Krokotopia")
+    assert kt["done"] == 3
+    # Tracker not running: not known whether it is still in the book.
+    live(state, 200.0, zone="Krokotopia/KT_Hub", tracked="", main=[])
+    stale = build(d, state, now=200.0 + spiral.LIVE_STALE + 1)
+    kt = next(w for w in stale["worlds"] if w["name"] == "Krokotopia")
+    assert kt["done"] == 2
+
+
+def test_build_without_progress_uses_the_zone(tmp_path):
+    state = tmp_path / "state"
+    live(state, 100.0, zone="WizardCity/WC_Hub", main=["Some Event Quest"])
+    data = build(docs(tmp_path), state, now=100.0)
+    assert data["current"]["world"] == "Wizard City"
+    assert data["current"]["unlisted"] == ["Some Event Quest"]
+    assert data["story"]["done"] == 0
 
 
 def test_the_repos_lists_load():
@@ -214,73 +140,58 @@ def test_the_repos_lists_load():
     assert len(lists["Wizard City"]) == 38 and len(lists["Khrysalis"]) > 200
     assert all(qs[-1].index == len(qs) for qs in lists.values())  # numbered 1..n, no gaps
     assert all(q.name and q.area for qs in lists.values() for q in qs)
-    guides = spiral.load_side_guides(REPO_DOCS)
-    assert {"MooShu", "Marleybone", "Dragonspyre", "Zafaria"} <= set(guides)
     data = build(REPO_DOCS, Path("/nonexistent-state"))
     assert data["story"]["total"] > 2000 and data["story"]["done"] == 0
 
 
-# --- tracker.py's window reads, on fake windows --------------------------------
+# --- tracker.read_quests, on a fake client --------------------------------------
 
 
-class Win:
-    def __init__(self, name, kids=(), text="", visible=True):
-        self._name, self._kids, self._text, self._visible = name, list(kids), text, visible
+class FakeQuest:
+    def __init__(self, key, main):
+        self.key, self.main = key, main
 
-    async def name(self):
-        return self._name
+    async def name_lang_key(self):
+        return self.key
 
-    async def children(self):
-        return self._kids
-
-    async def is_visible(self):
-        return self._visible
-
-    async def maybe_text(self):
-        return self._text
-
-    async def get_windows_with_name(self, name):
-        out = []
-        for k in self._kids:
-            if k._name == name:
-                out.append(k)
-            out.extend(await k.get_windows_with_name(name))
-        return out
+    async def mainline(self):
+        return self.main
 
 
-def slot(i, name, world, area, goal, main=False, active=False):
-    fields = Win("wndQuestInfo", [
-        Win("txtName", text=f"<center>{name}</center>"), Win("txtZone", text=world),
-        Win("txtWorld", text=area),
-        Win("txtGoal", text=goal), Win("LeftMainline", visible=main), Win("imgActiveQuest", visible=active),
-    ])
-    return Win(f"wndQuestInfo{i}", [Win("questInfoWindow", [fields])])
+class FakeManager:
+    def __init__(self, quests):
+        self.quests = quests
+
+    async def quest_data(self):
+        return self.quests
 
 
-class Client:
-    def __init__(self, root):
-        self.root_window = root
+class FakeClient:
+    def __init__(self, quests, tracked):
+        self._manager, self._tracked = FakeManager(quests), tracked
+
+    async def quest_manager(self):
+        return self._manager
+
+    async def quest_id(self):
+        return self._tracked
 
 
-def test_tracker_reads_the_open_quest_book_and_the_hud():
+def test_tracker_reads_the_quest_list_from_memory(monkeypatch):
     from wiz101_auto import tracker
 
-    book = Win("wndQuestList", [
-        slot(0, "Make Some Rubbings", "Krokotopia", "Royal Hall", "Find rubbings", main=True, active=True),
-        slot(1, "Lost Lamp", "Krokotopia", "Royal Hall", "Find the lamp"),
-        slot(2, "", "", "", ""),
-    ])
-    hud = Win("QuestHelperHud", [Win("ElementWindow", [Win("", [
-        Win("txtGoalName", text="Find rubbings"), Win("old", text="stale", visible=False)])])])
-    root = Win("root", [Win("WorldView", [Win("DeckConfiguration", [book]), Win("windowHUD", [hud])])])
-    client = Client(root)
-    page = asyncio.run(tracker.book_page(client))
-    assert page == [
-        {"name": "Make Some Rubbings", "area": "Royal Hall", "world": "Krokotopia", "goal": "Find rubbings",
-         "main": True, "active": True},
-        {"name": "Lost Lamp", "area": "Royal Hall", "world": "Krokotopia", "goal": "Find the lamp",
-         "main": False, "active": False},
+    names = {"Quests_1": "Make Some Rubbings", "Quests_2": "Lost Lamp"}
+
+    async def lang_name(_client, key):
+        return names.get(key, "")
+
+    monkeypatch.setattr(tracker, "lang_name", lang_name)
+    client = FakeClient({11: FakeQuest("Quests_1", True), 12: FakeQuest("Quests_2", False),
+                         13: FakeQuest("Quests_404", True), 14: FakeQuest("Quest Finder", False)}, 11)
+    quests, tracked = asyncio.run(tracker.read_quests(client))
+    assert quests == [
+        {"id": 11, "name": "Make Some Rubbings", "main": True},
+        {"id": 12, "name": "Lost Lamp", "main": False},
+        {"id": 14, "name": "Quest Finder", "main": False},
     ]
-    assert asyncio.run(tracker.hud_texts(client)) == ["Find rubbings"]
-    book._visible = False
-    assert asyncio.run(tracker.book_page(client)) is None
+    assert tracked == "Make Some Rubbings"

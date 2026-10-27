@@ -127,9 +127,8 @@ button.link:hover { border-color: var(--accent); color: var(--accent); }
 ul.quests { list-style: none; margin: 0 0 10px; padding: 0; }
 ul.quests li {
   display: grid; grid-template-columns: 22px 30px minmax(0, 1fr) auto; gap: 6px; align-items: baseline;
-  padding: 5px 8px; border-radius: 8px; cursor: pointer;
+  padding: 5px 8px; border-radius: 8px;
 }
-ul.quests li:hover { background: var(--track); }
 ul.quests li .ix { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
 ul.quests li .nm { overflow-wrap: anywhere; }
 ul.quests li .tg { color: var(--muted); font-size: 11px; white-space: nowrap; }
@@ -139,7 +138,6 @@ ul.quests li.tracked { background: var(--active-soft); outline: 1px solid color-
 .st.done { color: var(--done); }
 .st.active { color: var(--active); }
 .st.todo { color: var(--todo); }
-.you { font-size: 10px; color: var(--accent); margin-left: 6px; }
 
 .arc { margin-bottom: 14px; }
 .arc h3 { display: flex; justify-content: space-between; font-size: 13px; margin: 0 0 6px; color: var(--muted); font-weight: 600; }
@@ -155,7 +153,6 @@ ul.quests li.tracked { background: var(--active-soft); outline: 1px solid color-
 .wrow.cur .wn::after { content: " ●"; color: var(--live); font-size: 10px; }
 .wrow .wp { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 .wrow.dim { opacity: .55; }
-.side-head { font-size: 12px; color: var(--muted); margin: 8px 0 4px; text-transform: uppercase; letter-spacing: .06em; }
 
 .recent { list-style: none; margin: 0; padding: 0; font-size: 13px; }
 .recent li { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; padding: 3px 0; }
@@ -181,7 +178,6 @@ ul.quests li.tracked { background: var(--active-soft); outline: 1px solid color-
     <main>
       <section class="card now" id="now"></section>
       <section class="card" id="world"></section>
-      <section class="card" id="sides"></section>
     </main>
     <aside>
       <section class="card">
@@ -247,7 +243,7 @@ function renderLive() {
   const live = $("live"), text = $("liveText");
   live.classList.toggle("live", !!data.running);
   if (data.running) {
-    text.textContent = data.current.book_open ? "Live · reading your quest book" : "Live · reading Wizard101";
+    text.textContent = data.read_ok ? "Live · reading Wizard101" : "Live · quest list not readable right now";
   } else if (data.live_age != null) {
     text.textContent = `Tracker off · last read ${ago(data.live_age)}`;
   } else {
@@ -261,24 +257,23 @@ function renderNow(w) {
   $("follow").hidden = following;
   let quest = "";
   if (following && cur.quest) {
-    const tag = cur.main ? `<span class="badge main">Story${cur.index ? " #" + cur.index : ""}</span>` : `<span class="badge">Side</span>`;
+    const tag = cur.main ? `<span class="badge main">Story #${cur.index}</span>` : `<span class="badge">not story</span>`;
     quest = `<div class="quest-box"><div class="q">${esc(cur.quest)}${tag}</div>${cur.goal ? `<div class="g">${esc(cur.goal)}</div>` : ""}</div>`;
   } else if (following && cur.goal) {
-    quest = `<div class="quest-box"><div class="g">${esc(cur.goal)}</div></div>
-      <div class="hint">Open your quest book (Q) once and the tracker learns which quest this is.</div>`;
+    quest = `<div class="quest-box"><div class="g">${esc(cur.goal)}</div></div>`;
   } else if (following && !data.running) {
     quest = `<div class="hint">Start the tracker with <code>./mac/run.sh tracker</code> while Wizard101 is open.</div>`;
   }
   const where = following ? [cur.area, cur.zone && !cur.area ? cur.zone : ""].filter(Boolean).join(" · ") : "";
   const counts = w.has_list ? `${w.done} of ${w.total} story quests` : "no quest list for this world yet";
-  const side = w.side_total ? ` · side ${w.side_done} of ${w.side_total}` : "";
   $("now").innerHTML = `
     <div class="ring">${ring(w.pct)}<div class="num"><div><b>${w.pct}%</b><small>story</small></div></div></div>
     <div style="min-width:0">
       <p class="eyebrow">${following ? "You are in" : "Looking at"}${w.arc ? " · " + esc(w.arc) : ""}</p>
       <h2 class="world-name">${esc(w.name)}</h2>
-      <div class="sub">${esc(counts)}${esc(side)}${where ? " · " + esc(where) : ""}</div>
+      <div class="sub">${esc(counts)}${where ? " · " + esc(where) : ""}</div>
       ${quest}
+      ${following && cur.unlisted.length ? `<div class="hint">In your book as story, but on no list here: ${cur.unlisted.map(esc).join(", ")}</div>` : ""}
     </div>`;
 }
 
@@ -292,13 +287,11 @@ function defaultOpen(w) {
 }
 
 function questRow(q, withIndex) {
-  const mine = q.how === "you" ? `<span class="you">ticked by you</span>` : "";
   const tags = (q.tags || []).filter((t) => /^(BOSS|INSTANCE|D&C|SIDE)/i.test(t)).slice(0, 3).join(" · ");
-  const title = q.how ? `${q.status} — ${q.how}. Click to change.` : `${q.status}. Click to change.`;
-  return `<li class="${q.status}${q.tracked ? " tracked" : ""}" data-q="${esc(q.name)}" data-s="${q.status}" data-h="${esc(q.how || "")}" title="${esc(title)}">
+  return `<li class="${q.status}${q.tracked ? " tracked" : ""}">
     <span class="st ${q.status}">${ICON[q.status] || "○"}</span>
     <span class="ix">${withIndex && q.index ? q.index : ""}</span>
-    <span class="nm">${esc(q.name)}${mine}${q.giver ? ` <span class="tg">· ${esc(q.giver)}</span>` : ""}</span>
+    <span class="nm">${esc(q.name)}</span>
     <span class="tg">${esc(tags)}</span></li>`;
 }
 
@@ -318,28 +311,12 @@ function renderWorld(w) {
       <summary><span class="an">${esc(a.name)}</span>${bar(a.pct, a.done === a.total)}<span class="ac">${a.done}/${a.total}</span></summary>
       <ul class="quests">${a.quests.map((q) => questRow(q, true)).join("")}</ul></details>`;
   }).join("");
-  el.innerHTML = `<div class="toolbar"><h2>Story quests</h2><span class="legend">✓ done · ◆ in progress · ○ to do · click a quest to tick it</span></div>${areas}`;
+  el.innerHTML = `<div class="toolbar"><h2>Story quests</h2><span class="legend">✓ done · ◆ in progress · ○ to do</span></div>${areas}`;
   el.querySelectorAll("details.area").forEach((d) => d.addEventListener("toggle", () => {
     const set = openAreas[w.name] || new Set([defaultOpen(w)]);
     d.open ? set.add(d.dataset.area) : set.delete(d.dataset.area);
     openAreas[w.name] = set;
   }));
-}
-
-function renderSides(w) {
-  const el = $("sides");
-  if (!w.side_quests.length) {
-    el.innerHTML = `<div class="toolbar"><h2>Side quests</h2></div><p class="empty">${w.side_total
-      ? `The story here opens about ${w.side_total} side quests. They show up here once they are in your quest book.`
-      : "None seen yet. Side quests show up here once they are in your quest book."}</p>`;
-    return;
-  }
-  const groups = {};
-  w.side_quests.forEach((q) => (groups[q.area || "Elsewhere"] ||= []).push(q));
-  const html = Object.entries(groups).map(([area, qs]) =>
-    `<div class="side-head">${esc(area)} · ${qs.filter((q) => q.status === "done").length}/${qs.length}</div>
-     <ul class="quests">${qs.map((q) => questRow(q, false)).join("")}</ul>`).join("");
-  el.innerHTML = `<div class="toolbar"><h2>Side quests</h2><span class="legend">${w.side_done} of ${w.side_total} done</span></div>${html}`;
 }
 
 function renderArcs(w) {
@@ -360,8 +337,8 @@ function renderArcs(w) {
 }
 
 function renderRecent() {
-  const items = (data.recent || []).map((e) => `<li><time>${clock(e.t)}</time><span class="nm">${e.kind === "done" ? "✓ Finished" : "＋ New"}: ${esc(e.quest)}</span></li>`);
-  $("recent").innerHTML = items.length ? items.join("") : `<li class="empty">Nothing yet. Quests you pick up and finish show up here.</li>`;
+  const items = (data.recent || []).map((e) => `<li><time>${clock(e.t)}</time><span class="nm">${esc(e.world)} #${e.index}: ${esc(e.quest)}</span></li>`);
+  $("recent").innerHTML = items.length ? items.join("") : `<li class="empty">Nothing yet. Each new story quest you pick up shows up here.</li>`;
 }
 
 function render() {
@@ -375,7 +352,6 @@ function render() {
   }
   renderNow(w);
   renderWorld(w);
-  renderSides(w);
   renderArcs(w);
   renderRecent();
 }
@@ -395,19 +371,7 @@ async function refresh() {
   }
 }
 
-async function mark(name, status, how) {
-  // auto -> done -> to do -> auto (back to what the tracker says)
-  let next = "done";
-  if (how === "you") next = status === "done" ? "todo" : "auto";
-  else if (status === "done") next = "todo";
-  await fetch("/api/mark", {method: "POST", headers: {"Content-Type": "application/json", "X-Spiral": "1"},
-    body: JSON.stringify({name, status: next})});
-  refresh();
-}
-
 document.addEventListener("click", (ev) => {
-  const li = ev.target.closest("ul.quests li");
-  if (li) { mark(li.dataset.q, li.dataset.s, li.dataset.h); return; }
   const row = ev.target.closest(".wrow");
   if (row) {
     pinned = row.dataset.w === (data && data.current.world) ? null : row.dataset.w;

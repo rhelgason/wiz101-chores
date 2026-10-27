@@ -397,32 +397,29 @@ the repo and must not be chosen.
 
 ## Spiral Progress: `mode: tracker` (10-27, unverified live)
 
-The player asked for a page beside the game showing quest progress per world,
-updating as they play. `./mac/run.sh tracker` (Wizard101 open, the player
-playing) starts the page (`mac/spiral_web.py`, macOS python3, stdlib,
-http://127.0.0.1:8101/, stays up after the tracker stops; `./mac/run.sh web`
-starts only the page) and attaches hands off (`bot.HANDS_OFF`): the same
-recorded/adopted data hooks, then no mouse hook, no relog, no keys, no
-clicks, no button-up at stop, and a server logout does not stop it.
-`tracker.track_loop` only reads, every 1s (0.35s while the book is open):
-the zone, every visible text under `QuestHelperHud`, and the quest book's
-page when the player has it open (`wndQuestList` slots: `txtName`,
-`txtWorld` = area, `txtZone` = world, `txtGoal`, `LeftMainline`,
-`imgActiveQuest`). It writes `state/tracker_live.json` and
-`state/quest_seen.json` (`spiral.QuestMemory`).
-Done (`spiral.build`): a story quest when a later quest of its world's list
-was seen, or a later world was reached; any quest that was the book's
-tracked quest and was on no page looked at the next time the book was open
-with another one tracked (seen again -> not done). Ticks on the page
-(`state/quest_marks.json`) win. Lists: `docs/quests/<World>.txt` (Spiral
-Tracker's copy-paste format, restored from before 10-05; Wizard City was
-`docs/QuestList.txt`), side quests `docs/sidequests/<World>.txt` (four worlds).
-The HUD probably shows only the goal, not the quest's name: the tracked
-quest is known from the book (open it once after finishing a quest) or a
-goal recorded for exactly one quest. First live run should check: the book
-paths still hold, `quest_hud_window.txt` / `quest_book_window.txt` in the
-run folder (dumped once), and `quest_log_lines.txt` (game log lines with
-"quest": whether the log says when a quest is finished).
+The player asked for a page beside the game showing story progress per
+world, updating as they play. `./mac/run.sh tracker` (Wizard101 open, the
+player playing) starts the page (`mac/spiral_web.py`, macOS python3, stdlib,
+read only, http://127.0.0.1:8101/, stays up after the tracker stops;
+`./mac/run.sh web` starts only the page) and attaches hands off
+(`bot.HANDS_OFF`): the same recorded/adopted data hooks, then no mouse hook,
+no relog, no keys, no clicks, no button-up at stop, and a server logout does
+not stop it. `tracker.track_loop` only reads, every 2s: the game's quest
+list from memory (WizWalker's `client.quest_manager()`, a one-time pattern
+scan then a std::map quest id -> QuestData: `name_lang_key` via
+`names.lang_name`, `mainline`; `client.quest_id()` is the tracked quest;
+no hook, no write, Deimos reads the same), the HUD goal (`ui.quest_goal`),
+and the zone. It writes `state/tracker_live.json` and
+`state/quest_progress.json` (`spiral.Progress`: the furthest story quest
+seen per world, only ever forward; story quests on no list kept as
+`unlisted`). Done (`spiral.build`): everything before the furthest story
+quest of its world, every world before the furthest world reached, and the
+furthest quest itself once it has left the book. Side quests are not
+tracked (the player, 10-27: they would always be wrong); the quest-book UI
+reader, side-quest lists and hand ticks were removed. Lists:
+`docs/quests/<World>.txt` (Spiral Tracker's copy-paste format, restored
+from before 10-05). First live run should check: names resolve (the
+`quest_book` events list them), and the mainline flag is set on story quests.
 
 ## Logs and crash reports
 

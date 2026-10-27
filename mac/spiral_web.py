@@ -10,9 +10,7 @@ never touches the game, so it can stay open with or without the game.
   python3 mac/spiral_web.py --ensure   start it in the background unless it runs, open it
   python3 mac/spiral_web.py --print    the page's numbers once, as text
 
-The page asks for /data.json every two seconds. A click on a quest ticks it
-done / not done by hand (state/quest_marks.json); a third click gives it
-back to the tracker.
+The page asks for /data.json every two seconds. It only reads.
 """
 
 from __future__ import annotations
@@ -68,21 +66,6 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
-    def do_POST(self):  # noqa: N802 (http.server API)
-        # The custom header needs a CORS preflight, which this server never
-        # answers: only the page itself can tick quests.
-        if not self._local() or self.headers.get("X-Spiral") != "1" or self.path != "/api/mark":
-            self.send_error(403)
-            return
-        try:
-            length = min(int(self.headers.get("Content-Length") or 0), 10000)
-            payload = json.loads(self.rfile.read(length) or b"{}")
-            spiral.set_mark(STATE, str(payload.get("name", "")), str(payload.get("status", "auto")))
-            body = json.dumps({"ok": True}).encode("utf-8")
-        except Exception as exc:
-            body = json.dumps({"ok": False, "error": repr(exc)}).encode("utf-8")
-        self._send(body, "application/json")
-
     def log_message(self, *args):  # keep the terminal quiet
         pass
 
@@ -129,15 +112,14 @@ def ensure(port: int) -> None:
 def print_summary() -> None:
     data = spiral.build(DOCS, STATE)
     cur = data["current"]
-    print(f"tracker: {'live' if data['running'] else 'not running'}; quests seen: {data['seen_count']}")
+    print(f"tracker: {'live' if data['running'] else 'not running'}")
     print(f"now: {cur['world'] or '?'} / {cur['area'] or cur['zone'] or '?'}; quest: {cur['quest'] or '?'}; "
           f"goal: {cur['goal'] or '?'}")
     print(f"story: {data['story']['done']}/{data['story']['total']} ({data['story']['pct']}%)")
     for w in data["worlds"]:
-        if w["has_list"] or w["side_total"]:
+        if w["has_list"]:
             mark = "*" if w["current"] else " "
-            print(f" {mark} {w['name']:<12} {w['done']:>4}/{w['total']:<4} {w['pct']:>3}%   "
-                  f"side {w['side_done']}/{w['side_total']}")
+            print(f" {mark} {w['name']:<12} {w['done']:>4}/{w['total']:<4} {w['pct']:>3}%")
 
 
 def main() -> None:
