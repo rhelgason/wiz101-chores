@@ -376,8 +376,16 @@ async function refresh() {
 }
 
 async function markWorld(world, done) {
-  await fetch("/api/world", {method: "POST", headers: {"Content-Type": "application/json", "X-Spiral": "1"},
-    body: JSON.stringify({world, done})});
+  let ok = false, why = "";
+  try {
+    const r = await fetch("/api/world", {method: "POST", headers: {"Content-Type": "application/json", "X-Spiral": "1"},
+      body: JSON.stringify({world, done})});
+    const d = r.ok ? await r.json() : {};
+    ok = !!d.ok;
+    why = d.error || (r.ok ? "" : `the page server answered ${r.status}`);
+  } catch (e) { why = String(e); }
+  if (!ok) alert(`Could not mark ${world}: ${why}.\nThe page server may be an older one: run ./mac/run.sh web, then reload this page.`);
+  lastSig = "";
   refresh();
 }
 

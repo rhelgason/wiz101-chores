@@ -20,10 +20,14 @@ The page asks for /data.json every two seconds. Its one write is a world's
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
+import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,6 +42,24 @@ PAGE = Path(__file__).with_name("spiral.html")
 DOCS = ROOT / "docs"
 STATE = ROOT / "state"
 HOSTS = ("127.0.0.1", "localhost")
+# The code this server runs. A server started from older code is restarted:
+# it would serve the new page file with the old numbers (10-27: "Mark
+# finished" did nothing until the page server was restarted).
+CODE = (Path(__file__).resolve(), ROOT / "src" / "wiz101_auto" / "spiral.py")
+RELOAD_CHECK = 2.0
+
+
+def code_version() -> str:
+    h = hashlib.sha1()
+    for f in CODE:
+        try:
+            h.update(f.read_bytes())
+        except OSError:
+            pass
+    return h.hexdigest()[:12]
+
+
+VERSION = code_version()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -61,6 +83,8 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path in ("/", "/index.html"):
             self._send(PAGE.read_bytes(), "text/html; charset=utf-8")
+        elif path == "/version":
+            self._send(json.dumps({"version": VERSION}).encode("utf-8"), "application/json")
         elif path == "/data.json":
             try:
                 body = json.dumps(spiral.build(DOCS, STATE)).encode("utf-8")
@@ -98,26 +122,91 @@ def serving(port: int) -> bool:
 def serve(port: int, open_browser: bool) -> None:
     url = f"http://127.0.0.1:{port}/"
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print(f"Spiral Progress at {url} (Ctrl+C stops it)")
+    print(f"Spiral Progress at {url} (Ctrl+C stops it)", flush=True)
     if open_browser:
         webbrowser.open(url)
+    changed = threading.Event()
+
+    def watch_code() -> None:
+        while not changed.wait(RELOAD_CHECK):
+            if code_version() != VERSION:
+                changed.set()
+                server.shutdown()
+
+    threading.Thread(target=watch_code, daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         server.server_close()
+    if changed.is_set():
+        # A git pull changed this server's code: run the new code, same port.
+        print("the page server's code changed; restarting it", flush=True)
+        args = [a for a in sys.argv[1:] if a != "--open"]
+        os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), *args])
+
+
+def running_version(port: int) -> str | None:
+    """The version of the server on `port` ("" for one too old to say)."""
+    from urllib.error import HTTPError
+    from urllib.request import urlopen
+
+    try:
+        with urlopen(f"http://127.0.0.1:{port}/version", timeout=2) as r:
+            return json.loads(r.read() or b"{}").get("version") or ""
+    except HTTPError:
+        return ""
+    except Exception:
+        return None
+
+
+def stop_stale(port: int) -> bool:
+    """Stop the page server listening on `port` (only a spiral_web.py process)."""
+    try:
+        pids = subprocess.run(["lsof", "-nP", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"],
+                              capture_output=True, text=True, timeout=10).stdout.split()
+    except Exception:
+        return False
+    stopped = False
+    for pid in pids:
+        try:
+            cmd = subprocess.run(["ps", "-o", "command=", "-p", pid], capture_output=True, text=True,
+                                 timeout=10).stdout
+            if "spiral_web.py" in cmd:
+                os.kill(int(pid), signal.SIGTERM)
+                stopped = True
+        except Exception:
+            continue
+    for _ in range(50):
+        if not serving(port):
+            break
+        time.sleep(0.1)
+    return stopped and not serving(port)
 
 
 def ensure(port: int) -> None:
     """Start the page in the background unless it is up, then open it."""
     url = f"http://127.0.0.1:{port}/"
+    if serving(port):
+        theirs = running_version(port)
+        if theirs is not None and theirs != VERSION:
+            # (A current server restarts itself within RELOAD_CHECK; an old one never does.)
+            time.sleep(RELOAD_CHECK + 1)
+            if running_version(port) != VERSION:
+                if stop_stale(port):
+                    print("stopped an older Spiral Progress server")
+                else:
+                    print(f"An older Spiral Progress server is on port {port} and could not be stopped. "
+                          "Stop it (pkill -f spiral_web.py), then run this again.")
+                    return
     if not serving(port):
         log = ROOT / "logs" / "spiral_web.log"
         log.parent.mkdir(parents=True, exist_ok=True)
         with log.open("a") as out:
             subprocess.Popen(
-                [sys.executable, str(Path(__file__).resolve()), "--port", str(port)],
+                [sys.executable, str(Path(__file__).resolve()), "--port", str(port),
+                 *(["--state", str(STATE)] if STATE != ROOT / "state" else [])],
                 stdout=out, stderr=out, stdin=subprocess.DEVNULL, start_new_session=True,
             )
         for _ in range(30):

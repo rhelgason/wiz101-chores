@@ -420,7 +420,11 @@ reader, side-quest lists and hand ticks were removed. A world can be
 marked finished by hand (its "Mark finished" button, or `python3
 mac/spiral_web.py --finished Wintertusk`; `state/worlds_done.json`, only the
 page writes it): the optional worlds (Grizzleheim, Wintertusk, Wysteria,
-Catacombs) are never inferred (player, 10-27: all three Arc 1 ones done). Lists:
+Catacombs) are never inferred (player, 10-27: all three Arc 1 ones done).
+The page server restarts itself when its own code changes (`/version`, a
+hash of spiral_web.py and spiral.py), and `--ensure` stops an older one on
+the port: on 10-27 a server left running from before "Mark finished"
+served the new page with the old code (the button got 501, marks ignored). Lists:
 `docs/quests/<World>.txt` (Spiral Tracker's copy-paste format, restored
 from before 10-05). First live run should check: names resolve (the
 `quest_book` events list them), and the mainline flag is set on story quests.
