@@ -8,7 +8,7 @@ from typing import Any
 
 import yaml
 
-MODES = ("chores", "pet", "reagents", "seeds", "gather")  # chores is the day plan in PLAYBOOK.md
+MODES = ("chores", "pet", "reagents", "seeds", "gather", "tracker")  # chores is the day plan in PLAYBOOK.md
 
 
 @dataclass

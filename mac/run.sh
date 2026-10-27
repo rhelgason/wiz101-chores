@@ -5,6 +5,9 @@
 #   mac/run.sh pet        dance games in the Pet Pavilion
 #   mac/run.sh seeds      Savarstaad seed farm (start in Boar Camp)
 #   mac/run.sh gather     reagent farm (Black Lotus by default)
+#   mac/run.sh tracker    read quest progress while you play (no keys, no clicks)
+#                         and open the Spiral Progress page, http://127.0.0.1:8101/
+#   mac/run.sh web        only the page (no game needed): what the tracker last saw
 #   mac/run.sh            whatever config.yaml says (pet or seeds on this Mac)
 #   mac/run.sh doctor     versions and paths
 #   mac/run.sh --help     every setting as a flag, e.g.
@@ -25,6 +28,10 @@ WINE="/Applications/Wizard101.app/Contents/SharedSupport/wizard101/bin/wine"
 PREFIX="$HOME/Library/Application Support/Wizard101/Bottles/wizard101"
 PY="$HOME/Library/Application Support/wiz101-chores/python/python.exe"
 MACPY="/usr/bin/python3"
+
+if [[ "${1:-}" == "web" ]]; then
+  exec "$MACPY" "$ROOT/mac/spiral_web.py" --ensure
+fi
 
 if [[ ! -x "$WINE" ]]; then
   echo "Wizard101.app is not installed, so there is no Wine that shares the game."
@@ -78,7 +85,7 @@ CONFIG="config.yaml"
 MODE=""
 case "${1:-}" in
   "" | -* ) ;;
-  pet|seeds|gather) MODE="$1"; shift ;;
+  pet|seeds|gather|tracker) MODE="$1"; shift ;;
   chores|reagents)
     echo "$1 travels by teleport, and teleports closed this Wine client. On the Mac: pet, seeds or gather."
     exit 1 ;;
@@ -105,6 +112,10 @@ mkdir -p "$ROOT/$RUN_DIR"
 export WIZ_RUN_DIR="$RUN_DIR"
 export WIZ_WINE_VERSION="$("$WINE" --version 2>/dev/null || true)"
 "$MACPY" "$ROOT/mac/crashwatch.py" start --run-dir "$RUN_DIR"
+if [[ "$MODE" == "tracker" ]]; then
+  # The page runs on macOS Python and stays up after the tracker stops.
+  "$MACPY" "$ROOT/mac/spiral_web.py" --ensure
+fi
 
 echo "starting ${MODE:-the configured} mode in the Wizard101 bottle"
 echo "this run's logs: $RUN_DIR"

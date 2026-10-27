@@ -45,19 +45,24 @@ class LogWatch:
         except OSError:
             return 0
 
-    def poll(self) -> str | None:
-        """A disconnect line logged since the last poll, or None."""
+    def read_new(self) -> str:
+        """What the game logged since the last read ("" if nothing)."""
         size = self._size()
         if size < self.offset:
             self.offset = 0  # the game was started again and rewrote its log
         if size == self.offset or self.path is None:
-            return None
+            return ""
         start = max(self.offset, size - READ_MAX)
         try:
             with self.path.open("rb") as f:
                 f.seek(start)
                 data = f.read(size - start)
         except OSError:
-            return None
+            return ""
         self.offset = size
-        return disconnect_line(data.decode("utf-8", errors="replace"))
+        return data.decode("utf-8", errors="replace")
+
+    def poll(self) -> str | None:
+        """A disconnect line logged since the last poll, or None."""
+        text = self.read_new()
+        return disconnect_line(text) if text else None

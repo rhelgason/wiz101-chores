@@ -7,8 +7,10 @@ The connect order is the safety story (hooking.py has the why):
 4. the loop, with a heartbeat into events.jsonl;
 5. stop: the mouse hook comes out, the other hooks stay for the next run.
 
-On the Mac only `pet`, `seeds` and `gather` run. The day plan and reagent sweeps
-travel by teleport, and teleports are what closed this Wine client.
+On the Mac only `pet`, `seeds`, `gather` and `tracker` run. The day plan and
+reagent sweeps travel by teleport, and teleports are what closed this Wine client.
+`tracker` is hands off (HANDS_OFF): the same data hooks, but no mouse hook, no
+keys, no clicks, no relog; it only reads, while the player plays.
 """
 
 from __future__ import annotations
@@ -35,7 +37,8 @@ CONNECT_TIMEOUT = 300.0
 SHUTDOWN_WAIT = 10.0
 PARK_TIMEOUT = 25.0
 HEARTBEAT = 10.0
-MAC_MODES = ("pet", "seeds", "gather")
+MAC_MODES = ("pet", "seeds", "gather", "tracker")
+HANDS_OFF = ("tracker",)  # modes that never press, click or take the mouse: the player is playing
 WORLD_HOOKS = ("player_struct", "player_stat_struct", "current_client", "current_render_context")
 
 
@@ -111,7 +114,8 @@ async def close_handler(handler: ClientHandler) -> bool:
     """Stop: park the hooks (mouse out, the rest stay). Returns True if that hung."""
     stuck = False
     for client in list(handler.clients):
-        release_mouse_buttons(client)
+        if not getattr(client, "_hands_off", False):
+            release_mouse_buttons(client)
         if getattr(client, "_posted_keys", None) is not None:
             try:
                 client._posted_keys.release_movement()
@@ -170,6 +174,8 @@ async def connect(handler: ClientHandler, mode: str = "seeds", jumps: bool = Fal
     blackbox.install_write_guard()
     hooks = Hooks(client)
     client._bot_hooks = hooks
+    hands_off = mode in HANDS_OFF
+    client._hands_off = hands_off
     teleport = mode in ("chores", "reagents") and not in_wine()
     logger.info(f"hooks: attaching to game process {client.process_id}")
     blackbox.event("connect", pid=client.process_id, hwnd=client.window_handle, mode=mode)
@@ -215,13 +221,14 @@ async def connect(handler: ClientHandler, mode: str = "seeds", jumps: bool = Fal
         hooks.handler._wait_for_value(hooks.handler._base_addrs["current_root_window"], None),
         timeout=HOOK_TIMEOUT,
     )
-    await hooks.mouse_in()
-    from .relog import at_character_select, play_from_character_select, reconnect_if_asked
+    if not hands_off:
+        await hooks.mouse_in()
+        from .relog import at_character_select, play_from_character_select, reconnect_if_asked
 
-    if await reconnect_if_asked(client):
-        await asyncio.sleep(3.0)
-    if await at_character_select(client):
-        await play_from_character_select(client)
+        if await reconnect_if_asked(client):
+            await asyncio.sleep(3.0)
+        if await at_character_select(client):
+            await play_from_character_select(client)
     try:
         await asyncio.wait_for(
             asyncio.gather(
@@ -242,6 +249,13 @@ async def connect(handler: ClientHandler, mode: str = "seeds", jumps: bool = Fal
         blackbox.guard.lock()
         _no_teleport(client)
         client._walk_only = True  # travel.go_to_zone walks (navigate.py)
+    if hands_off:
+        logger.success(
+            f"connected to the game, hands off (hooks reused: {', '.join(hooks.adopted) or 'none'}; "
+            f"written now: {', '.join(hooks.installed) or 'none'})"
+        )
+        blackbox.event("connected", adopted=hooks.adopted, installed=hooks.installed, hands_off=True)
+        return client
     from .petdance import install_wine_keys
     from .walk import keys_for
 
@@ -382,6 +396,11 @@ async def chore_loop(client, cfg: Config, controller: Controller, task: dict):
 
         await gather_loop(client, controller, task, cfg.gather)
         return
+    if cfg.mode == "tracker":
+        from .tracker import track_loop
+
+        await track_loop(client, controller, task)
+        return
     if cfg.mode == "pet":
         from .petdance import pet_loop
 
@@ -468,7 +487,7 @@ def game_gone(controller: Controller, times: int) -> bool:
     return True
 
 
-async def heartbeat_loop(client, controller: Controller, task: dict):
+async def heartbeat_loop(client, controller: Controller, task: dict, stop_on_logout: bool = True):
     """status.json every 5s, and a state line in events.jsonl every HEARTBEAT seconds."""
     from .gamelog import LogWatch
     from .service import write_status
@@ -477,7 +496,10 @@ async def heartbeat_loop(client, controller: Controller, task: dict):
     game_log = LogWatch()
     while not controller.stopped.is_set():
         dropped = game_log.poll()
-        if dropped:
+        if dropped and not stop_on_logout:
+            logger.warning(f"the game server logged the wizard out: {dropped}; still watching")
+            blackbox.event("logged_out", line=dropped)
+        elif dropped:
             logger.warning(f"the game server logged the wizard out: {dropped}")
             why = "the game logged out (log back in, then start the bot)"
             blackbox.event("needs_player", why=why, line=dropped)
@@ -521,7 +543,7 @@ def _apply_mode(cfg: Config):
     if cfg.mode == "pet":
         cfg.pet.auto = True
         cfg.reagents.enabled = False
-    elif cfg.mode in ("reagents", "seeds", "gather"):
+    elif cfg.mode in ("reagents", "seeds", "gather", "tracker"):
         cfg.pet.auto = False
         cfg.reagents.enabled = cfg.mode == "reagents"
 
@@ -548,6 +570,7 @@ async def run(cfg: Config):
         ),
         "pet": "the dance game while energy can pay, waiting for energy in between",
         "gather": f"{cfg.gather.reagent} from its spawn spots, on foot, around creatures",
+        "tracker": "quest progress for the Spiral Progress page, read only (no keys, clicks or mouse hook)",
     }.get(cfg.mode, "the day plan")
     logger.info(f"mode={cfg.mode}: {doing}. {s.stop_key}=stop, {s.pause_key}=pause/resume")
     blackbox.event("run_start", mode=cfg.mode, wine=wine_version() or in_wine(), pid=os.getpid())
@@ -583,7 +606,10 @@ async def run(cfg: Config):
         tasks = [
             asyncio.create_task(controller.watch(), name="safety"),
             asyncio.create_task(chore_loop(client, cfg, controller, task), name="main"),
-            asyncio.create_task(heartbeat_loop(client, controller, task), name="heartbeat"),
+            asyncio.create_task(
+                heartbeat_loop(client, controller, task, stop_on_logout=cfg.mode not in HANDS_OFF),
+                name="heartbeat",
+            ),
         ]
         if s.pause_releases_mouse:
             tasks.append(asyncio.create_task(mouse_on_pause(client, controller), name="mouse"))

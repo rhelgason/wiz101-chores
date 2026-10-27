@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spiral Progress</title>
+<style>
+:root {
+  --bg: #f6f3ec;
+  --panel: #fffdf8;
+  --ink: #23201a;
+  --muted: #6f685b;
+  --line: #e4ddcd;
+  --track: #ece5d4;
+  --accent: #6b4fc8;
+  --accent-soft: #ece6ff;
+  --gold: #b07d12;
+  --done: #2f8a4f;
+  --done-soft: #e3f3e8;
+  --active: #c46a12;
+  --active-soft: #fdf0e1;
+  --todo: #9b927f;
+  --live: #23a55a;
+  --shadow: 0 1px 2px rgba(40, 30, 10, .06), 0 4px 16px rgba(40, 30, 10, .05);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14121c;
+    --panel: #1d1a28;
+    --ink: #ece8f6;
+    --muted: #a39cb8;
+    --line: #2f2a40;
+    --track: #2b2639;
+    --accent: #a48cff;
+    --accent-soft: #2c2448;
+    --gold: #e2b54a;
+    --done: #5cc985;
+    --done-soft: #1d3326;
+    --active: #f0a35a;
+    --active-soft: #3a2a18;
+    --todo: #7d7593;
+    --live: #4ade80;
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14121c; --panel: #1d1a28; --ink: #ece8f6; --muted: #a39cb8; --line: #2f2a40; --track: #2b2639;
+  --accent: #a48cff; --accent-soft: #2c2448; --gold: #e2b54a; --done: #5cc985; --done-soft: #1d3326;
+  --active: #f0a35a; --active-soft: #3a2a18; --todo: #7d7593; --live: #4ade80; --shadow: none;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+}
+.wrap { max-width: 1180px; margin: 0 auto; padding: 20px 16px 48px; }
+header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
+h1 span { color: var(--accent); }
+.pill {
+  display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; background: var(--panel);
+}
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--todo); }
+.pill.live .dot { background: var(--live); box-shadow: 0 0 0 0 var(--live); animation: pulse 2s infinite; }
+.pill.live { color: var(--ink); }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--live) 60%, transparent); }
+  70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+.spacer { flex: 1; }
+button.link {
+  background: none; border: 1px solid var(--line); color: var(--ink); border-radius: 8px;
+  padding: 4px 10px; font: inherit; font-size: 13px; cursor: pointer;
+}
+button.link:hover { border-color: var(--accent); color: var(--accent); }
+
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 18px; align-items: start; }
+@media (max-width: 900px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+.card {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: var(--shadow); padding: 18px; min-width: 0;
+}
+.card + .card { margin-top: 18px; }
+.eyebrow { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 6px; }
+
+.now { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 20px; align-items: center; }
+@media (max-width: 560px) { .now { grid-template-columns: minmax(0, 1fr); } }
+.ring { width: 132px; height: 132px; position: relative; }
+.ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.ring .num { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; }
+.ring .num b { font-size: 30px; font-variant-numeric: tabular-nums; display: block; line-height: 1; }
+.ring .num small { color: var(--muted); font-size: 12px; }
+.world-name { font-size: 26px; font-weight: 650; margin: 0; line-height: 1.15; overflow-wrap: anywhere; }
+.sub { color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+.quest-box {
+  margin-top: 12px; border-left: 3px solid var(--accent); background: var(--accent-soft);
+  border-radius: 0 10px 10px 0; padding: 9px 12px;
+}
+.quest-box .q { font-weight: 600; overflow-wrap: anywhere; }
+.quest-box .g { color: var(--ink); opacity: .85; overflow-wrap: anywhere; }
+.badge {
+  display: inline-block; font-size: 11px; font-weight: 600; border-radius: 6px; padding: 1px 6px;
+  margin-left: 6px; vertical-align: 1px; background: var(--track); color: var(--muted);
+}
+.badge.main { background: var(--gold); color: #fff; }
+.hint { color: var(--muted); font-size: 13px; margin-top: 8px; }
+
+.bar { height: 8px; border-radius: 99px; background: var(--track); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--accent); border-radius: 99px; transition: width .6s ease; }
+.bar.done i { background: var(--done); }
+
+.area { border-top: 1px solid var(--line); }
+.area:first-of-type { border-top: 0; }
+.area > summary {
+  list-style: none; cursor: pointer; display: grid; grid-template-columns: minmax(0, 1fr) 120px 64px;
+  gap: 12px; align-items: center; padding: 10px 2px;
+}
+.area > summary::-webkit-details-marker { display: none; }
+.area > summary .an { font-weight: 600; overflow-wrap: anywhere; }
+.area > summary .an::before { content: "▸"; display: inline-block; width: 16px; color: var(--muted); transition: transform .15s; }
+.area[open] > summary .an::before { transform: rotate(90deg); }
+.area > summary .ac { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; }
+.area.here > summary .an { color: var(--accent); }
+@media (max-width: 480px) { .area > summary { grid-template-columns: minmax(0, 1fr) 70px 54px; } }
+
+ul.quests { list-style: none; margin: 0 0 10px; padding: 0; }
+ul.quests li {
+  display: grid; grid-template-columns: 22px 30px minmax(0, 1fr) auto; gap: 6px; align-items: baseline;
+  padding: 5px 8px; border-radius: 8px; cursor: pointer;
+}
+ul.quests li:hover { background: var(--track); }
+ul.quests li .ix { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
+ul.quests li .nm { overflow-wrap: anywhere; }
+ul.quests li .tg { color: var(--muted); font-size: 11px; white-space: nowrap; }
+ul.quests li.done .nm { color: var(--muted); }
+ul.quests li.tracked { background: var(--active-soft); outline: 1px solid color-mix(in srgb, var(--active) 45%, transparent); }
+.st { font-size: 14px; text-align: center; }
+.st.done { color: var(--done); }
+.st.active { color: var(--active); }
+.st.todo { color: var(--todo); }
+.you { font-size: 10px; color: var(--accent); margin-left: 6px; }
+
+.arc { margin-bottom: 14px; }
+.arc h3 { display: flex; justify-content: space-between; font-size: 13px; margin: 0 0 6px; color: var(--muted); font-weight: 600; }
+.arc.current h3 { color: var(--accent); }
+.wrow {
+  display: grid; grid-template-columns: 96px minmax(0, 1fr) 40px; gap: 10px; align-items: center;
+  padding: 4px 6px; border-radius: 8px; cursor: pointer; font-size: 13px;
+}
+.wrow:hover { background: var(--track); }
+.wrow.sel { background: var(--accent-soft); }
+.wrow .wn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wrow.cur .wn { font-weight: 700; }
+.wrow.cur .wn::after { content: " ●"; color: var(--live); font-size: 10px; }
+.wrow .wp { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.wrow.dim { opacity: .55; }
+.side-head { font-size: 12px; color: var(--muted); margin: 8px 0 4px; text-transform: uppercase; letter-spacing: .06em; }
+
+.recent { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+.recent li { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; padding: 3px 0; }
+.recent li time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.recent li .nm { overflow-wrap: anywhere; }
+.empty { color: var(--muted); font-size: 14px; }
+.toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+.toolbar h2 { font-size: 17px; margin: 0; }
+.legend { color: var(--muted); font-size: 12px; margin-left: auto; }
+.err { color: #c0392b; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Spiral <span>Progress</span></h1>
+    <span id="live" class="pill"><span class="dot"></span><span id="liveText">connecting…</span></span>
+    <span class="spacer"></span>
+    <button class="link" id="follow" hidden>Back to current world</button>
+  </header>
+
+  <div class="grid">
+    <main>
+      <section class="card now" id="now"></section>
+      <section class="card" id="world"></section>
+      <section class="card" id="sides"></section>
+    </main>
+    <aside>
+      <section class="card">
+        <p class="eyebrow">The Spiral · story</p>
+        <div id="story"></div>
+        <div id="arcs" style="margin-top:14px"></div>
+      </section>
+      <section class="card">
+        <p class="eyebrow">Lately</p>
+        <ul class="recent" id="recent"></ul>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const ICON = {done: "✓", active: "◆", todo: "○"};
+
+let data = null;
+let pinned = null;          // a world picked in the sidebar; null = follow the game
+let openAreas = {};         // world -> Set of area names opened by hand
+let lastTracked = "";
+let lastSig = "";
+
+try { pinned = localStorage.getItem("spiral.pinned") || null; } catch (e) { pinned = null; }
+function savePin() { try { pinned ? localStorage.setItem("spiral.pinned", pinned) : localStorage.removeItem("spiral.pinned"); } catch (e) {} }
+
+function ago(sec) {
+  if (sec == null || !isFinite(sec)) return "never";
+  if (sec < 60) return Math.round(sec) + "s ago";
+  if (sec < 3600) return Math.round(sec / 60) + " min ago";
+  if (sec < 86400) return Math.round(sec / 3600) + " h ago";
+  return Math.round(sec / 86400) + " d ago";
+}
+function clock(t) {
+  const d = new Date(t * 1000);
+  return d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+}
+function bar(pct, done) {
+  return `<div class="bar${done ? " done" : ""}"><i style="width:${Math.max(0, Math.min(100, pct))}%"></i></div>`;
+}
+function ring(pct) {
+  const r = 56, c = 2 * Math.PI * r, off = c * (1 - Math.max(0, Math.min(100, pct)) / 100);
+  return `<svg viewBox="0 0 132 132" aria-hidden="true">
+    <circle cx="66" cy="66" r="${r}" fill="none" stroke="var(--track)" stroke-width="12"/>
+    <circle cx="66" cy="66" r="${r}" fill="none" stroke="${pct >= 100 ? "var(--done)" : "var(--accent)"}" stroke-width="12"
+      stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${off}" style="transition:stroke-dashoffset .6s ease"/></svg>`;
+}
+
+function shownWorld() {
+  if (!data) return null;
+  const want = pinned || data.current.world;
+  return data.worlds.find((w) => w.name === want)
+      || data.worlds.find((w) => w.current)
+      || data.worlds.find((w) => w.reached && w.pct < 100)
+      || data.worlds[0];
+}
+
+function renderLive() {
+  const live = $("live"), text = $("liveText");
+  live.classList.toggle("live", !!data.running);
+  if (data.running) {
+    text.textContent = data.current.book_open ? "Live · reading your quest book" : "Live · reading Wizard101";
+  } else if (data.live_age != null) {
+    text.textContent = `Tracker off · last read ${ago(data.live_age)}`;
+  } else {
+    text.textContent = "Tracker not started yet";
+  }
+}
+
+function renderNow(w) {
+  const cur = data.current;
+  const following = !pinned || pinned === data.current.world;
+  $("follow").hidden = following;
+  let quest = "";
+  if (following && cur.quest) {
+    const tag = cur.main ? `<span class="badge main">Story${cur.index ? " #" + cur.index : ""}</span>` : `<span class="badge">Side</span>`;
+    quest = `<div class="quest-box"><div class="q">${esc(cur.quest)}${tag}</div>${cur.goal ? `<div class="g">${esc(cur.goal)}</div>` : ""}</div>`;
+  } else if (following && cur.goal) {
+    quest = `<div class="quest-box"><div class="g">${esc(cur.goal)}</div></div>
+      <div class="hint">Open your quest book (Q) once and the tracker learns which quest this is.</div>`;
+  } else if (following && !data.running) {
+    quest = `<div class="hint">Start the tracker with <code>./mac/run.sh tracker</code> while Wizard101 is open.</div>`;
+  }
+  const where = following ? [cur.area, cur.zone && !cur.area ? cur.zone : ""].filter(Boolean).join(" · ") : "";
+  const counts = w.has_list ? `${w.done} of ${w.total} story quests` : "no quest list for this world yet";
+  const side = w.side_total ? ` · side ${w.side_done} of ${w.side_total}` : "";
+  $("now").innerHTML = `
+    <div class="ring">${ring(w.pct)}<div class="num"><div><b>${w.pct}%</b><small>story</small></div></div></div>
+    <div style="min-width:0">
+      <p class="eyebrow">${following ? "You are in" : "Looking at"}${w.arc ? " · " + esc(w.arc) : ""}</p>
+      <h2 class="world-name">${esc(w.name)}</h2>
+      <div class="sub">${esc(counts)}${esc(side)}${where ? " · " + esc(where) : ""}</div>
+      ${quest}
+    </div>`;
+}
+
+// Areas are keyed by position: a world can visit one area twice (Marleybone's Royal Museum).
+const areaKey = (a, i) => i + ":" + a.name;
+function defaultOpen(w) {
+  const pick = (test) => { const i = w.areas.findIndex(test); return i >= 0 ? areaKey(w.areas[i], i) : null; };
+  return pick((a) => a.quests.some((q) => q.tracked))
+      ?? pick((a) => a.quests.some((q) => q.status === "active"))
+      ?? pick((a) => a.done < a.total) ?? "";
+}
+
+function questRow(q, withIndex) {
+  const mine = q.how === "you" ? `<span class="you">ticked by you</span>` : "";
+  const tags = (q.tags || []).filter((t) => /^(BOSS|INSTANCE|D&C|SIDE)/i.test(t)).slice(0, 3).join(" · ");
+  const title = q.how ? `${q.status} — ${q.how}. Click to change.` : `${q.status}. Click to change.`;
+  return `<li class="${q.status}${q.tracked ? " tracked" : ""}" data-q="${esc(q.name)}" data-s="${q.status}" data-h="${esc(q.how || "")}" title="${esc(title)}">
+    <span class="st ${q.status}">${ICON[q.status] || "○"}</span>
+    <span class="ix">${withIndex && q.index ? q.index : ""}</span>
+    <span class="nm">${esc(q.name)}${mine}${q.giver ? ` <span class="tg">· ${esc(q.giver)}</span>` : ""}</span>
+    <span class="tg">${esc(tags)}</span></li>`;
+}
+
+function renderWorld(w) {
+  const el = $("world");
+  if (!w.has_list) {
+    el.innerHTML = `<div class="toolbar"><h2>Story quests</h2></div>
+      <p class="empty">No quest list for ${esc(w.name)} yet. Paste its list from Spiral Tracker into
+      <code>docs/quests/${esc(w.name)}.txt</code> (area headings like “Unicorn Way (10 quests)”, then “1.”, the name, tags).</p>`;
+    return;
+  }
+  const opened = openAreas[w.name] || new Set([defaultOpen(w)]);
+  const areas = w.areas.map((a, i) => {
+    const here = a.quests.some((q) => q.tracked);
+    const key = areaKey(a, i);
+    return `<details class="area${here ? " here" : ""}" data-area="${esc(key)}" ${opened.has(key) ? "open" : ""}>
+      <summary><span class="an">${esc(a.name)}</span>${bar(a.pct, a.done === a.total)}<span class="ac">${a.done}/${a.total}</span></summary>
+      <ul class="quests">${a.quests.map((q) => questRow(q, true)).join("")}</ul></details>`;
+  }).join("");
+  el.innerHTML = `<div class="toolbar"><h2>Story quests</h2><span class="legend">✓ done · ◆ in progress · ○ to do · click a quest to tick it</span></div>${areas}`;
+  el.querySelectorAll("details.area").forEach((d) => d.addEventListener("toggle", () => {
+    const set = openAreas[w.name] || new Set([defaultOpen(w)]);
+    d.open ? set.add(d.dataset.area) : set.delete(d.dataset.area);
+    openAreas[w.name] = set;
+  }));
+}
+
+function renderSides(w) {
+  const el = $("sides");
+  if (!w.side_quests.length) {
+    el.innerHTML = `<div class="toolbar"><h2>Side quests</h2></div><p class="empty">${w.side_total
+      ? `The story here opens about ${w.side_total} side quests. They show up here once they are in your quest book.`
+      : "None seen yet. Side quests show up here once they are in your quest book."}</p>`;
+    return;
+  }
+  const groups = {};
+  w.side_quests.forEach((q) => (groups[q.area || "Elsewhere"] ||= []).push(q));
+  const html = Object.entries(groups).map(([area, qs]) =>
+    `<div class="side-head">${esc(area)} · ${qs.filter((q) => q.status === "done").length}/${qs.length}</div>
+     <ul class="quests">${qs.map((q) => questRow(q, false)).join("")}</ul>`).join("");
+  el.innerHTML = `<div class="toolbar"><h2>Side quests</h2><span class="legend">${w.side_done} of ${w.side_total} done</span></div>${html}`;
+}
+
+function renderArcs(w) {
+  const s = data.story;
+  $("story").innerHTML = `<div style="display:flex;justify-content:space-between;margin-bottom:6px">
+      <b>${s.pct}%</b><span class="sub">${s.done} / ${s.total} story quests</span></div>${bar(s.pct, s.pct >= 100)}`;
+  const byName = Object.fromEntries(data.worlds.map((x) => [x.name, x]));
+  const row = (x) => `<div class="wrow${x.current ? " cur" : ""}${x.name === w.name ? " sel" : ""}${x.reached || x.pct ? "" : " dim"}" data-w="${esc(x.name)}">
+      <span class="wn" title="${esc(x.name)}">${esc(x.name)}</span>${bar(x.pct, x.pct >= 100)}<span class="wp">${x.has_list ? x.pct + "%" : "–"}</span></div>`;
+  $("arcs").innerHTML = data.arcs.map((a) => `<div class="arc${a.current ? " current" : ""}">
+      <h3><span>${esc(a.name)}</span><span>${a.pct}%</span></h3>
+      ${a.worlds.map((n) => byName[n]).filter(Boolean).map(row).join("")}
+      ${a.side_worlds.map((n) => byName[n]).filter(Boolean).map(row).join("")}</div>`).join("")
+    + (() => {
+      const extra = data.worlds.filter((x) => !data.arcs.some((a) => a.worlds.includes(x.name) || a.side_worlds.includes(x.name)));
+      return extra.length ? `<div class="arc"><h3><span>Elsewhere</span></h3>${extra.map(row).join("")}</div>` : "";
+    })();
+}
+
+function renderRecent() {
+  const items = (data.recent || []).map((e) => `<li><time>${clock(e.t)}</time><span class="nm">${e.kind === "done" ? "✓ Finished" : "＋ New"}: ${esc(e.quest)}</span></li>`);
+  $("recent").innerHTML = items.length ? items.join("") : `<li class="empty">Nothing yet. Quests you pick up and finish show up here.</li>`;
+}
+
+function render() {
+  if (!data) return;
+  renderLive();
+  const w = shownWorld();
+  if (!w) return;
+  if (!pinned && data.current.quest && data.current.quest !== lastTracked) {
+    lastTracked = data.current.quest;
+    delete openAreas[w.name];  // follow the story into its new area
+  }
+  renderNow(w);
+  renderWorld(w);
+  renderSides(w);
+  renderArcs(w);
+  renderRecent();
+}
+
+async function refresh() {
+  try {
+    const r = await fetch("/data.json", {cache: "no-store"});
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    // Redraw only when something changed (a redraw mid-click loses the click).
+    const sig = JSON.stringify({...d, updated: 0, live_age: d.live_age == null ? null : Math.floor(d.live_age / 30)});
+    data = d;
+    if (sig !== lastSig) { lastSig = sig; render(); }
+  } catch (e) {
+    $("live").classList.remove("live");
+    $("liveText").textContent = "page server stopped: run python3 mac/spiral_web.py";
+  }
+}
+
+async function mark(name, status, how) {
+  // auto -> done -> to do -> auto (back to what the tracker says)
+  let next = "done";
+  if (how === "you") next = status === "done" ? "todo" : "auto";
+  else if (status === "done") next = "todo";
+  await fetch("/api/mark", {method: "POST", headers: {"Content-Type": "application/json", "X-Spiral": "1"},
+    body: JSON.stringify({name, status: next})});
+  refresh();
+}
+
+document.addEventListener("click", (ev) => {
+  const li = ev.target.closest("ul.quests li");
+  if (li) { mark(li.dataset.q, li.dataset.s, li.dataset.h); return; }
+  const row = ev.target.closest(".wrow");
+  if (row) {
+    pinned = row.dataset.w === (data && data.current.world) ? null : row.dataset.w;
+    savePin();
+    render();
+    window.scrollTo({top: 0, behavior: "smooth"});
+  }
+});
+$("follow").addEventListener("click", () => { pinned = null; savePin(); render(); });
+setInterval(() => { if (data && !data.running) renderLive(); }, 30000);
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>
