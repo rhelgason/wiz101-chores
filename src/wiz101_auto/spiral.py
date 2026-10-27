@@ -14,6 +14,10 @@ Where the numbers come from:
   list from memory (the quests in the book, each with its main-story flag).
 - state/tracker_live.json: what the tracker read just now (zone, the HUD
   goal, the tracked quest, the main-story quests in the book).
+- state/worlds_done.json: worlds the player marked finished on the page
+  (the optional ones, Grizzleheim, Wintertusk, Wysteria, Catacombs, cannot
+  be inferred: a later world says nothing about them). Only the page
+  writes it.
 
 The furthest story quest seen is in progress (done, once it has left the
 book); every quest before it on its world's list is done, and so is every
@@ -50,6 +54,7 @@ _SUBZONE_WORLDS = {"grizzleheim/ghhfjord": "Wintertusk"}
 
 PROGRESS_FILE = "quest_progress.json"
 LIVE_FILE = "tracker_live.json"
+WORLDS_DONE_FILE = "worlds_done.json"
 LIVE_STALE = 15.0  # tracker_live.json older than this: the tracker is not running
 EVENTS_KEPT = 40
 
@@ -272,6 +277,7 @@ def build(docs: Path, state: Path, now: float | None = None) -> dict:
     fresh = bool(live) and now - float(live.get("time") or 0) < LIVE_STALE
     running = fresh and live.get("state") != "stopped"
     in_book = {norm(n) for n in (live.get("main") or [])} if running else None
+    marked = set(worlds_done(state))
 
     live_world = world_of_zone(live.get("zone") or "") if live else ""
     here_index = max((WORLDS.index(w) for w in reached if w in WORLDS), default=-1)
@@ -290,7 +296,7 @@ def build(docs: Path, state: Path, now: float | None = None) -> dict:
         listed = lists.get(name, [])
         i = WORLDS.index(name) if name in WORLDS else -1
         top = int((reached.get(name) or {}).get("index") or 0)
-        earlier_world = 0 <= i < here_index
+        earlier_world = 0 <= i < here_index or name in marked
         areas: list = []
         done = 0
         for q in listed:
@@ -319,7 +325,8 @@ def build(docs: Path, state: Path, now: float | None = None) -> dict:
             "done": done,
             "pct": _pct(done, len(listed)) if listed else (100 if earlier_world else 0),
             "current": name == current_world,
-            "reached": 0 <= i <= here_index or top > 0,
+            "reached": 0 <= i <= here_index or top > 0 or name in marked,
+            "marked": name in marked,
             "areas": areas,
         })
 
@@ -364,3 +371,19 @@ def build(docs: Path, state: Path, now: float | None = None) -> dict:
         "worlds": worlds,
         "recent": list(reversed(progress.get("events") or []))[:12],
     }
+
+
+def worlds_done(state: Path) -> list:
+    """Worlds the player marked finished."""
+    names = read_json(state / WORLDS_DONE_FILE).get("worlds") or []
+    return [canonical_world(n) for n in names if canonical_world(n)]
+
+
+def set_world_done(state: Path, world: str, done: bool) -> list:
+    """Mark a world finished (or take the mark back). Returns the marked worlds."""
+    name = canonical_world(world)
+    if not name:
+        raise ValueError(f"no world called {world!r}")
+    marked = [w for w in worlds_done(state) if w != name] + ([name] if done else [])
+    write_json(state / WORLDS_DONE_FILE, {"worlds": marked})
+    return marked

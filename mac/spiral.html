@@ -311,7 +311,11 @@ function renderWorld(w) {
       <summary><span class="an">${esc(a.name)}</span>${bar(a.pct, a.done === a.total)}<span class="ac">${a.done}/${a.total}</span></summary>
       <ul class="quests">${a.quests.map((q) => questRow(q, true)).join("")}</ul></details>`;
   }).join("");
-  el.innerHTML = `<div class="toolbar"><h2>Story quests</h2><span class="legend">✓ done · ◆ in progress · ○ to do</span></div>${areas}`;
+  // A world finished before the tracker ran (the optional ones above all) is marked by hand.
+  const markBtn = w.marked
+    ? `<button class="link" data-finish="${esc(w.name)}" data-done="0" title="Back to what the tracker has seen">Not finished</button>`
+    : w.pct < 100 ? `<button class="link" data-finish="${esc(w.name)}" data-done="1">Mark ${esc(w.name)} finished</button>` : "";
+  el.innerHTML = `<div class="toolbar"><h2>Story quests</h2>${markBtn}<span class="legend">✓ done · ◆ in progress · ○ to do${w.marked ? " · marked finished by you" : ""}</span></div>${areas}`;
   el.querySelectorAll("details.area").forEach((d) => d.addEventListener("toggle", () => {
     const set = openAreas[w.name] || new Set([defaultOpen(w)]);
     d.open ? set.add(d.dataset.area) : set.delete(d.dataset.area);
@@ -371,7 +375,15 @@ async function refresh() {
   }
 }
 
+async function markWorld(world, done) {
+  await fetch("/api/world", {method: "POST", headers: {"Content-Type": "application/json", "X-Spiral": "1"},
+    body: JSON.stringify({world, done})});
+  refresh();
+}
+
 document.addEventListener("click", (ev) => {
+  const btn = ev.target.closest("[data-finish]");
+  if (btn) { markWorld(btn.dataset.finish, btn.dataset.done === "1"); return; }
   const row = ev.target.closest(".wrow");
   if (row) {
     pinned = row.dataset.w === (data && data.current.world) ? null : row.dataset.w;

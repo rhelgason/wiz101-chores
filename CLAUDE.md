@@ -416,7 +416,11 @@ seen per world, only ever forward; story quests on no list kept as
 quest of its world, every world before the furthest world reached, and the
 furthest quest itself once it has left the book. Side quests are not
 tracked (the player, 10-27: they would always be wrong); the quest-book UI
-reader, side-quest lists and hand ticks were removed. Lists:
+reader, side-quest lists and hand ticks were removed. A world can be
+marked finished by hand (its "Mark finished" button, or `python3
+mac/spiral_web.py --finished Wintertusk`; `state/worlds_done.json`, only the
+page writes it): the optional worlds (Grizzleheim, Wintertusk, Wysteria,
+Catacombs) are never inferred (player, 10-27: all three Arc 1 ones done). Lists:
 `docs/quests/<World>.txt` (Spiral Tracker's copy-paste format, restored
 from before 10-05). First live run should check: names resolve (the
 `quest_book` events list them), and the mainline flag is set on story quests.

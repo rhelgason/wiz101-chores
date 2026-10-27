@@ -195,3 +195,21 @@ def test_tracker_reads_the_quest_list_from_memory(monkeypatch):
         {"id": 14, "name": "Quest Finder", "main": False},
     ]
     assert tracked == "Make Some Rubbings"
+
+
+def test_a_world_marked_finished_counts_as_done(tmp_path):
+    d, state = docs(tmp_path), tmp_path / "state"
+    assert spiral.set_world_done(state, "krokotopia", True) == ["Krokotopia"]
+    worlds = {w["name"]: w for w in build(d, state)["worlds"]}
+    assert worlds["Krokotopia"]["marked"] and worlds["Krokotopia"]["done"] == 3
+    assert worlds["Krokotopia"]["reached"]
+    assert worlds["Wizard City"]["done"] == 0  # a mark says nothing about other worlds
+    assert spiral.set_world_done(state, "Krokotopia", False) == []
+    assert next(w for w in build(d, state)["worlds"] if w["name"] == "Krokotopia")["done"] == 0
+
+
+def test_marking_an_unknown_world_is_refused(tmp_path):
+    import pytest
+
+    with pytest.raises(ValueError):
+        spiral.set_world_done(tmp_path, "Atlantis", True)

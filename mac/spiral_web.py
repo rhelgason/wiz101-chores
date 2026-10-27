@@ -9,8 +9,12 @@ never touches the game, so it can stay open with or without the game.
   python3 mac/spiral_web.py --open     ... and open it in the browser
   python3 mac/spiral_web.py --ensure   start it in the background unless it runs, open it
   python3 mac/spiral_web.py --print    the page's numbers once, as text
+  python3 mac/spiral_web.py --finished Wintertusk --finished Wysteria
+  python3 mac/spiral_web.py --unfinished Wintertusk
 
-The page asks for /data.json every two seconds. It only reads.
+The page asks for /data.json every two seconds. Its one write is a world's
+"Mark finished" button (state/worlds_done.json): the optional worlds
+(Grizzleheim, Wintertusk, Wysteria, Catacombs) cannot be inferred.
 """
 
 from __future__ import annotations
@@ -65,6 +69,21 @@ class Handler(BaseHTTPRequestHandler):
             self._send(body, "application/json")
         else:
             self.send_error(404)
+
+    def do_POST(self):  # noqa: N802 (http.server API)
+        # The custom header needs a CORS preflight, which this server never
+        # answers: only the page itself can mark a world.
+        if not self._local() or self.headers.get("X-Spiral") != "1" or self.path != "/api/world":
+            self.send_error(403)
+            return
+        try:
+            length = min(int(self.headers.get("Content-Length") or 0), 10000)
+            payload = json.loads(self.rfile.read(length) or b"{}")
+            marked = spiral.set_world_done(STATE, str(payload.get("world", "")), bool(payload.get("done")))
+            body = json.dumps({"ok": True, "worlds": marked}).encode("utf-8")
+        except Exception as exc:
+            body = json.dumps({"ok": False, "error": str(exc)}).encode("utf-8")
+        self._send(body, "application/json")
 
     def log_message(self, *args):  # keep the terminal quiet
         pass
@@ -129,11 +148,22 @@ def main() -> None:
     ap.add_argument("--ensure", action="store_true", help="start in the background unless running; open it")
     ap.add_argument("--print", action="store_true", help="print the numbers once and exit")
     ap.add_argument("--state", type=Path, help="read this state folder instead of the repo's (a demo)")
+    ap.add_argument("--finished", action="append", default=[], metavar="WORLD", help="mark a world finished")
+    ap.add_argument("--unfinished", action="append", default=[], metavar="WORLD", help="take that mark back")
     args = ap.parse_args()
     if args.state:
         global STATE
         STATE = args.state.resolve()
-    if args.print:
+    if args.finished or args.unfinished:
+        try:
+            for world in args.finished:
+                marked = spiral.set_world_done(STATE, world, True)
+            for world in args.unfinished:
+                marked = spiral.set_world_done(STATE, world, False)
+        except ValueError as exc:
+            sys.exit(f"{exc}. Worlds: {', '.join((*spiral.WORLDS, *spiral.SIDE_WORLDS))}")
+        print(f"marked finished: {', '.join(marked) or 'none'}")
+    elif args.print:
         print_summary()
     elif args.ensure:
         ensure(args.port)
