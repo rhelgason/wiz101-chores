@@ -37,7 +37,7 @@ CONNECT_TIMEOUT = 300.0
 SHUTDOWN_WAIT = 10.0
 PARK_TIMEOUT = 25.0
 HEARTBEAT = 10.0
-MAC_MODES = ("pet", "seeds", "gather", "tracker")
+MAC_MODES = ("pet", "seeds", "gather", "tracker", "peril")
 HANDS_OFF = ("tracker",)  # modes that never press, click or take the mouse: the player is playing
 WORLD_HOOKS = ("player_struct", "player_stat_struct", "current_client", "current_render_context")
 
@@ -396,6 +396,11 @@ async def chore_loop(client, cfg: Config, controller: Controller, task: dict):
 
         await gather_loop(client, controller, task, cfg.gather)
         return
+    if cfg.mode == "peril":
+        from .peril import peril_loop
+
+        await peril_loop(client, controller, task, cfg.peril)
+        return
     if cfg.mode == "tracker":
         from .tracker import track_loop
 
@@ -543,7 +548,7 @@ def _apply_mode(cfg: Config):
     if cfg.mode == "pet":
         cfg.pet.auto = True
         cfg.reagents.enabled = False
-    elif cfg.mode in ("reagents", "seeds", "gather", "tracker"):
+    elif cfg.mode in ("reagents", "seeds", "gather", "tracker", "peril"):
         cfg.pet.auto = False
         cfg.reagents.enabled = cfg.mode == "reagents"
 
@@ -570,6 +575,7 @@ async def run(cfg: Config):
         ),
         "pet": "the dance game while energy can pay, waiting for energy in between",
         "gather": f"{cfg.gather.reagent} from its spawn spots, on foot, around creatures",
+        "peril": "ride along through the Portal of Peril with whoever starts a run, until out of credits",
         "tracker": "quest progress for the Spiral Progress page, read only (no keys, clicks or mouse hook)",
     }.get(cfg.mode, "the day plan")
     logger.info(f"mode={cfg.mode}: {doing}. {s.stop_key}=stop, {s.pause_key}=pause/resume")

@@ -32,8 +32,8 @@ Do not force-kill Python. A `pgrep -f` whose pattern also appears in the
 bash command matches itself. Reading files in the game folder is fine.
 
 Start: Wizard101 logged in, wizard standing in the world anywhere, then
-`./mac/run.sh pet`, `./mac/run.sh seeds` or `./mac/run.sh gather` (`tracker`: below, hands off). Each walks to its place first
-(the Pet Pavilion; Savarstaad Pass, then Boar Camp), world door included. A bare `./mac/run.sh`
+`./mac/run.sh pet`, `./mac/run.sh seeds`, `./mac/run.sh gather` or `./mac/run.sh peril` (`tracker`: below, hands off). Each walks to its place first
+(the Pet Pavilion; Savarstaad Pass, then Boar Camp; the Commons' Portal of Peril sigil), world door included. A bare `./mac/run.sh`
 loads gitignored `config.yaml` (local file is `mode: seeds`). Every setting
 is also a flag after the mode (`cli.add_setting_flags`, generated from the
 config dataclasses: `--seeds-leash` and `--leash`, `--no-sell`, `--hunt
@@ -394,6 +394,39 @@ hopping yet.
 Windows day plan; their pulls and camp jumps still teleport, so they stay
 refused on the Mac even though zone travel now walks. Garden, fishing, and hatching stay in
 the repo and must not be chosen.
+
+## Portal of Peril: `mode: peril` (10-30, unverified live)
+
+The player asked (10-30) for the wizard to ride along with other players
+through the Portal of Peril as often as the day allows, fighting with
+Mass Feint first, then Empower and Scarecrow. Researched, not seen: Madam
+Magda's event, one week a month (the Great Clock Gauntlet until Mon
+2026-11-02), level 30+, sigil by her tent in the Fairegrounds corner of the
+Commons (`WizardCity/WC_Hub`, near the Golem Court gate). A credit per
+entry: 2 a day, 4 for members; they expire when the event closes. Tiers
+50/100/150, everyone scaled to the highest wizard on the sigil. A wizard
+defeated inside can Dungeon Recall in without a credit (not used yet).
+
+`peril.Rider`: walk to the Commons; find the sigil live (object names with
+peril/gauntlet/portal, a "sigil" nearest Madam Magda, else Magda; saved to
+`state/peril.json`; every object to `peril_entities.txt`); stand on it.
+Once a day, with nobody else on it, use it and click "Claim" if shown
+(the window goes to `peril_sigil_window.txt`; it then closes menus). It
+never starts a run. A message box about entering is accepted; one saying
+the credits are gone stops the run for the day (`box_kind`). A small A/D
+turn every 4 min against the AFK kick. Any zone reached from the sigil is
+"inside" until the Commons or a house: walk into a duel circle (the group's;
+the instance is private), else follow the nearest other "Player Object"
+(`peril.follow_gap`); when they are all out of sight, walk to the last spot
+and use what is there (X prompt; else W); alone `peril.alone_minutes` (3):
+Go Home, yes to the leave box, walk back. Inside fights:
+`farm.plan_dungeon_round` (Mass Feint, Empower once, Scarecrow; Mass Feint
+again before each later Scarecrow; never discarded) and no flee
+(`_cast_combo(dungeon=True)`). Back in the Commons a run is counted per day;
+`peril.runs` (0: until out of credits) caps it. First live run should
+check: the sigil's object name, what using it opens (claim, tier window, or
+a solo start), the entry box text, how doors between rooms work, and how a
+run ends.
 
 ## Spiral Progress: `mode: tracker` (10-27, unverified live)
 

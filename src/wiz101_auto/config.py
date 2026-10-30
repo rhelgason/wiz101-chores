@@ -8,7 +8,8 @@ from typing import Any
 
 import yaml
 
-MODES = ("chores", "pet", "reagents", "seeds", "gather", "tracker")  # chores is the day plan in PLAYBOOK.md
+# chores is the day plan in PLAYBOOK.md
+MODES = ("chores", "pet", "reagents", "seeds", "gather", "tracker", "peril")
 
 
 @dataclass
@@ -83,6 +84,19 @@ class GatherConfig:
 
 
 @dataclass
+class PerilConfig:
+    """`mode: peril`: wait on the Portal of Peril sigil in the Commons, go in
+    with whoever starts a run, follow them, fight with Mass Feint, Empower,
+    Scarecrow; again until the day's credits are spent."""
+
+    runs: int = 0  # runs a day at most; 0: until the game says the credits are gone
+    claim: bool = True  # use the sigil once a day and click Claim, if it shows one
+    follow_gap: float = 350.0  # stay this close to the nearest group member
+    alone_minutes: float = 3.0  # inside with no other wizard this long: Go Home, walk back
+    zone: str = ""  # the sigil's zone; empty: the Commons (WizardCity/WC_Hub)
+
+
+@dataclass
 class Config:
     mode: str = "chores"  # the day plan | pet only | a reagent sweep | Savarstaad seeds
     log_file: str = "wiz101-auto.log"
@@ -91,6 +105,7 @@ class Config:
     reagents: ReagentConfig = field(default_factory=ReagentConfig)
     seeds: SeedsConfig = field(default_factory=SeedsConfig)
     gather: GatherConfig = field(default_factory=GatherConfig)
+    peril: PerilConfig = field(default_factory=PerilConfig)
 
 
 def _merge(obj: Any, data: dict[str, Any], path: str = "") -> Any:
@@ -112,7 +127,7 @@ def _merge(obj: Any, data: dict[str, Any], path: str = "") -> Any:
     return obj
 
 
-SECTIONS = ("seeds", "gather", "pet", "safety", "reagents")
+SECTIONS = ("seeds", "gather", "peril", "pet", "safety", "reagents")
 
 
 def load_config(path: str | Path | None, overrides: dict[str, Any] | None = None) -> Config:
@@ -165,6 +180,10 @@ def validate(cfg: Config) -> Config:
         raise ValueError("gather.reagent must name a reagent")
     if cfg.gather.zone_count < 1:
         raise ValueError("gather.zone_count must be 1 or more")
+    if cfg.peril.runs < 0:
+        raise ValueError("peril.runs must be 0 (until the credits run out) or more")
+    if cfg.peril.follow_gap < 100:
+        raise ValueError("peril.follow_gap must be at least 100")
     if cfg.seeds.leash < 500:
         raise ValueError("seeds.leash must be at least 500")
     for item in cfg.seeds.hunts:

@@ -259,6 +259,20 @@ is read as no couch potatoes, so the farm starts on Splithoof. The potato
 count is the backpack total, and a reward line that names a couch potato
 seed adds one when a stack does not show up as its own slot.
 
+## Portal of Peril (`mode: peril`)
+
+While Madam Magda's event is open (one week a month), the wizard walks to
+her sigil in the Fairegrounds of the Commons and waits there for other
+wizards. It never starts a run or picks a tier; it goes in with whoever
+does, accepting the entry question. Inside it stays with the group: it
+walks into their duel, follows the nearest wizard, and goes through the
+door they went through. Each fight is Mass Feint, Empower, then Scarecrow
+(Mass Feint again before another Scarecrow), and it is never fled. Back in
+the Commons the run is counted and it waits on the sigil again, until the
+game says the day's credits are gone (or `peril.runs` is reached). Once a
+day it uses the sigil alone to claim the day's credits. Left alone inside
+for three minutes, it goes home and walks back.
+
 ## Stopping
 
 On this Mac the stop is the menu bar item **Wiz on**, `Stop Wizard Bot.command`,

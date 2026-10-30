@@ -5,6 +5,7 @@
 #   mac/run.sh pet        dance games in the Pet Pavilion
 #   mac/run.sh seeds      Savarstaad seed farm (start in Boar Camp)
 #   mac/run.sh gather     reagent farm (Black Lotus by default)
+#   mac/run.sh peril      ride along through the Portal of Peril (stand by Madam Magda's sigil)
 #   mac/run.sh tracker    read quest progress while you play (no keys, no clicks)
 #                         and open the Spiral Progress page, http://127.0.0.1:8101/
 #   mac/run.sh web        only the page (no game needed): what the tracker last saw
@@ -85,9 +86,9 @@ CONFIG="config.yaml"
 MODE=""
 case "${1:-}" in
   "" | -* ) ;;
-  pet|seeds|gather|tracker) MODE="$1"; shift ;;
+  pet|seeds|gather|tracker|peril) MODE="$1"; shift ;;
   chores|reagents)
-    echo "$1 travels by teleport, and teleports closed this Wine client. On the Mac: pet, seeds or gather."
+    echo "$1 travels by teleport, and teleports closed this Wine client. On the Mac: pet, seeds, gather or peril."
     exit 1 ;;
   *) CONFIG="$1"; shift ;;
 esac

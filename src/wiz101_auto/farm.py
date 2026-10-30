@@ -691,13 +691,14 @@ async def in_fight(client) -> bool:
     return fight_visible(phase, cards, names)
 
 
-async def play_current_fight(client, controller, *, combo: bool = True) -> str | None:
+async def play_current_fight(client, controller, *, combo: bool = True, dungeon: bool = False) -> str | None:
     """Play the duel that is already going. Does not walk or teleport.
 
     'mana' or 'health' when it was fled for want of that; else None.
+    `dungeon`: Mass Feint, Empower, Scarecrow, and no flee (peril.py).
     """
     logger.info("farm: a fight is already going; playing it")
-    fled = await _play(client, controller, combo=combo)
+    fled = await _play(client, controller, combo=combo, dungeon=dungeon)
     await _note_potato(client)
     from . import ui
 
@@ -1190,6 +1191,8 @@ def combo_spell(name: str) -> str | None:
     """'Death Blade' -> deathblade. 'Empowered' is not Empower."""
     low = (name or "").lower()
     flat = re.sub(r"[^a-z]", "", low)
+    if "massfeint" in flat:  # the Portal of Peril opener; a plain Feint is not it
+        return "massfeint"
     if "deathblade" in flat:
         return "deathblade"
     if "scarecrow" in flat:
@@ -1241,6 +1244,47 @@ def plan_round(hand: list[dict], done: list[str], heal: bool = False) -> tuple:
     return ("pass",)
 
 
+def feint_up(done: list[str]) -> bool:
+    """A Mass Feint is waiting on the enemies for the next Scarecrow."""
+    for step in reversed(done):
+        if step in ("massfeint", "scarecrow"):
+            return step == "massfeint"
+    return False
+
+
+def plan_dungeon_round(hand: list[dict], done: list[str], heal: bool = False) -> tuple:
+    """One round of a Portal of Peril fight, riding with a group (the player, 10-30):
+    Mass Feint on the enemies, Empower on the wizard (once a fight), then
+    Scarecrow, and Mass Feint again before each later Scarecrow. Same cards
+    and answers as plan_round; a feint that cannot be cast does not hold
+    Scarecrow back, and a Mass Feint is never discarded."""
+    def castable(spell: str) -> list[int]:
+        return [i for i, c in enumerate(hand) if c.get("spell") == spell and c.get("castable")]
+
+    scarecrow, feint, empower = castable("scarecrow"), castable("massfeint"), castable("empower")
+    empower_ready = "empower" not in done
+    if heal and not scarecrow:
+        return ("drain",)
+    if feint and not feint_up(done):
+        return ("cast", feint[0])
+    if empower and empower_ready:
+        return ("cast", empower[0])
+    if scarecrow:
+        return ("cast", scarecrow[0])
+    if not any(c.get("spell") == "scarecrow" for c in hand):
+        junk = [
+            i
+            for i, c in enumerate(hand)
+            if not c.get("keep")
+            and not c.get("drain")
+            and c.get("spell") != "massfeint"
+            and not (c.get("spell") == "empower" and empower_ready)
+        ]
+        if junk:
+            return ("discard", junk)
+    return ("pass",)
+
+
 async def _planning_ready(handler) -> bool | None:
     """True on the planning phase. False when the phase says the fight ended.
 
@@ -1272,8 +1316,10 @@ async def _ready_to_cast(handler, phase: bool | None, cards: int) -> bool:
     return await _planning_ready(handler) is True
 
 
-async def _play(client, controller, combo: bool = False) -> str | None:
-    """Play rounds until the duel is gone. 'mana' or 'health' when it was fled for that."""
+async def _play(client, controller, combo: bool = False, dungeon: bool = False) -> str | None:
+    """Play rounds until the duel is gone. 'mana' or 'health' when it was fled for that.
+
+    `dungeon`: the Portal of Peril plan (plan_dungeon_round), and never a flee."""
     from wizwalker.combat import AoeHandler
 
     handler = AoeHandler(client)
@@ -1340,8 +1386,8 @@ async def _play(client, controller, combo: bool = False) -> str | None:
         casts += 1
         await _note_foes(handler)
         try:
-            if combo:
-                step = await _cast_combo(handler, done, heal=needs_heal(ratio), memo=memo)
+            if combo or dungeon:
+                step = await _cast_combo(handler, done, heal=needs_heal(ratio), memo=memo, dungeon=dungeon)
                 if step.startswith("flee:"):
                     why = step.split(":", 1)[1]
                     if await flee(client, controller, why=f"out of {why}"):
@@ -1467,11 +1513,15 @@ async def _cast_on_self(handler, card) -> None:
         await handler.client.mouse_handler.click_window(member._combatant_control)
 
 
-async def _cast_combo(handler, done: list[str], heal: bool = False, memo: dict | None = None) -> str:
+async def _cast_combo(
+    handler, done: list[str], heal: bool = False, memo: dict | None = None, dungeon: bool = False
+) -> str:
     """Empower on the wizard, then Scarecrow; dig for Scarecrow by discarding.
 
     'flee:mana' or 'flee:health' instead when passing on would end in a
     defeat (flee_reason); the caller flees. `memo` carries the dry-round count.
+    `dungeon` (Portal of Peril): Mass Feint first (plan_dungeon_round), and
+    no flee: fleeing a group's dungeon fight leaves the group a member short.
     """
     memo = {} if memo is None else memo
     hand = await _read_hand(handler)
@@ -1485,22 +1535,28 @@ async def _cast_combo(handler, done: list[str], heal: bool = False, memo: dict |
         last_vitals.clear()
         last_vitals.update(vitals)
     reason = flee_reason(infos, vitals, memo["dry"])
+    if reason and dungeon:
+        if not memo.get("told"):
+            logger.warning(f"farm: out of {reason} ({vitals_text(vitals)}); in a dungeon: no flee, passing")
+            memo["told"] = True
+        reason = ""
     if reason:
         shown = ", ".join(f"{i['name']}{'' if i['castable'] else ' (not castable)'}" for i in infos)
         logger.warning(f"farm: out of {reason} ({vitals_text(vitals)}); hand: {shown or 'nothing'}")
         blackbox.event("cast", spell="flee", why=reason, vitals=vitals, dry=memo["dry"])
         return f"flee:{reason}"
-    action = plan_round(infos, done, heal)
+    plan = plan_dungeon_round if dungeon else plan_round
+    action = plan(infos, done, heal)
     if action[0] == "drain":
         drained = await _cast_drain(handler)
         if drained:
             return drained
         logger.info("farm: health is low and no death drain is in hand")
-        action = plan_round(infos, done, False)
+        action = plan(infos, done, False)
     if action[0] == "cast":
         card, info = hand[action[1]]
         step = info["spell"]
-        if step == "scarecrow":
+        if step in ("scarecrow", "massfeint"):  # both hit every enemy: no target
             await card.cast(None)
         else:
             await _cast_on_self(handler, card)
