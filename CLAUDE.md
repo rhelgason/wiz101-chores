@@ -266,7 +266,8 @@ Updated after the 10-10 live runs (these supersede the line above):
   for pips: pass (a drain when hurt), no flee while it is castable; after
   `SHIP_WAIT` (6) uncastable rounds, or once it has gone and enemies live, the
   Empower/Scarecrow plan below. Ship and Colossal are never discarded.
-  Unverified live (the ship's AoE click, the enchant drag, the card names).
+  The enchant is two clicks (Colossal, then the ship; WizWalker `card.cast(card)`).
+  Unverified live (the ship's AoE click, the enchant, the card names).
 - Fights: `farm.plan_round` — drain when hurt and Scarecrow can't go;
   Empower once per fight whenever castable; Scarecrow when castable;
   Scarecrow not in hand → discard everything but Empower (unused),

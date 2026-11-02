@@ -1596,7 +1596,10 @@ async def _cast_combo(handler, done: list[str], heal: bool = False, memo: dict |
 
 
 async def _cast_ship(handler, hand, action, done: list[str], vitals: dict) -> str:
-    """Colossal onto Ship of Fools, then the enchanted ship at once (all enemies)."""
+    """Colossal onto Ship of Fools, then the enchanted ship at once (all enemies).
+
+    The enchant is two clicks, no drag: Colossal, then the ship (WizWalker's
+    card-on-card cast clicks one, then the other)."""
     colossal, ship = hand[action[1]][0], hand[action[2]][0]
     await colossal.cast(ship)
     logger.info(f"farm: Colossal on Ship of Fools ({vitals_text(vitals)})")
