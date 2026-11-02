@@ -287,3 +287,32 @@ def test_round_plan_drains_when_hurt_unless_scarecrow_can_go():
 def test_empower_is_found_under_an_internal_name():
     assert combo_spell("Spell_Empower") == "empower"
     assert combo_spell("Empowerment") is None
+
+
+def test_ship_of_fools_goes_first_with_colossal():
+    from wiz101_auto.farm import combo_spell, plan_round
+
+    assert combo_spell("Ship of Fools") == "ship"
+    assert combo_spell("Colossal") == "colossal"
+    hand = [card("scarecrow"), card("empower"), {"spell": "ship", "castable": True}, card("colossal")]
+    assert plan_round(hand, []) == ("enchant", 3, 2)
+    enchanted = [card("empower"), {"spell": "ship", "castable": True, "enchanted": True}]
+    assert plan_round(enchanted, []) == ("cast", 1)
+    assert plan_round([card("empower"), {"spell": "ship", "castable": True}], []) == ("cast", 1)
+
+
+def test_ship_of_fools_waits_for_pips_then_the_old_plan_follows():
+    from wiz101_auto.farm import plan_round
+
+    waiting = [card("empower"), card("scarecrow"), {"spell": "ship", "castable": False}]
+    assert plan_round(waiting, []) == ("pass",)
+    assert plan_round(waiting, [], heal=True) == ("drain",)
+    assert plan_round(waiting, ["ship"]) == ("cast", 0)  # the ship went and someone lived
+    assert plan_round([card("empower"), card("scarecrow")], []) == ("cast", 0)  # no ship drawn
+
+
+def test_digging_for_scarecrow_keeps_ship_and_colossal():
+    from wiz101_auto.farm import plan_round
+
+    hand = [card(), {"spell": "ship", "castable": True}, card("colossal")]
+    assert plan_round(hand, ["ship", "empower"]) == ("discard", [0])

@@ -114,6 +114,7 @@ FLEE_BELOW = 0.30  # in a fight with nothing castable to heal: flee
 SCARECROW_PIPS = 7  # its pip cost, and so its mana cost
 DRY_WITH_PIPS = 2  # rounds Scarecrow stayed uncastable with its pips up (one may be a stun)
 DRY_BLIND = 7  # rounds, when neither mana nor pips read
+SHIP_WAIT = 6  # rounds Ship of Fools may sit uncastable before Empower/Scarecrow take over
 FLEE_WAIT = 25.0  # a flee takes effect when the round resolves
 last_foes: dict = {}  # the enemies seen in the last duel, by owner id -> name
 last_vitals: dict = {}  # the wizard's own combatant, last read in a duel (gives the globes' maxima)
@@ -124,6 +125,9 @@ DRAIN_EFFECTS = {"steal_health", "steal_over_time"}
 # Savarstaad. Empower, then Scarecrow, then Scarecrow again if they live.
 # Deathblade stays in the deck and is not cast on this farm.
 COMBO = ("empower", "scarecrow")
+# First, since 11-02 (the player's new card): Colossal on Ship of Fools, cast at
+# once. Empower and Scarecrow are the fallback when the ship leaves anyone up.
+OPENER = ("colossal", "ship")
 
 
 def _flat(name: str) -> str:
@@ -1192,6 +1196,10 @@ def combo_spell(name: str) -> str | None:
     flat = re.sub(r"[^a-z]", "", low)
     if "deathblade" in flat:
         return "deathblade"
+    if "shipoffools" in flat:
+        return "ship"
+    if "colossal" in flat:
+        return "colossal"
     if "scarecrow" in flat:
         return "scarecrow"
     # Letters only: an internal name like "Spell_Empower" has no word break before
@@ -1208,10 +1216,36 @@ def next_combo(done: list[str], castable: set[str], in_hand: set[str]) -> str | 
     return hand[action[1]]["spell"] if action[0] == "cast" else None
 
 
+def ship_first(hand: list[dict], done: list[str]) -> tuple | None:
+    """The opener, until Ship of Fools has gone once this fight. None: no Ship
+    of Fools in hand, so the Empower/Scarecrow plan goes on.
+
+    ('enchant', colossal, ship) when both can go and the ship is bare;
+    ('cast', ship) when it can go; ('pass',) while it waits for pips.
+    """
+    if "ship" in done:
+        return None
+    ships = [i for i, c in enumerate(hand) if c.get("spell") == "ship"]
+    if not ships:
+        return None
+    ready = [i for i in ships if hand[i].get("castable")]
+    if not ready:
+        return ("pass",)
+    best = next((i for i in ready if hand[i].get("enchanted")), ready[0])
+    colossal = [i for i, c in enumerate(hand) if c.get("spell") == "colossal" and c.get("castable")]
+    if colossal and not hand[best].get("enchanted"):
+        return ("enchant", colossal[0], best)
+    return ("cast", best)
+
+
 def plan_round(hand: list[dict], done: list[str], heal: bool = False) -> tuple:
-    """One round of the Savarstaad farm. `hand` is one dict per card:
-    spell ('empower' | 'scarecrow' | None), castable, keep (a treasure or item
-    card: never discarded), drain (a death drain).
+    """One round of the seeds/hunt fight. `hand` is one dict per card:
+    spell ('ship' | 'colossal' | 'empower' | 'scarecrow' | None), castable,
+    enchanted, keep (a treasure or item card: never discarded), drain (a death
+    drain).
+
+    Ship of Fools first (`ship_first`, enchanted with Colossal when one is in
+    hand); while it waits for pips, a drain only when hurt. Then:
 
     ('drain',) when health is low and Scarecrow cannot go; ('cast', i);
     ('discard', [i, ...]) when Scarecrow is not in hand at all, so the next
@@ -1219,6 +1253,11 @@ def plan_round(hand: list[dict], done: list[str], heal: bool = False) -> tuple:
     whenever it is castable: it no longer holds Scarecrow back while it waits
     for pips, and Scarecrow no longer waits forever for a card never drawn.
     """
+    opener = ship_first(hand, done)
+    if opener is not None:
+        if opener[0] == "pass" and heal:
+            return ("drain",)
+        return opener
     scarecrow = [i for i, c in enumerate(hand) if c.get("spell") == "scarecrow" and c.get("castable")]
     empower_ready = "empower" not in done
     empower = [i for i, c in enumerate(hand) if c.get("spell") == "empower" and c.get("castable")]
@@ -1234,6 +1273,7 @@ def plan_round(hand: list[dict], done: list[str], heal: bool = False) -> tuple:
             for i, c in enumerate(hand)
             if not c.get("keep")
             and not c.get("drain")
+            and c.get("spell") not in OPENER
             and not (c.get("spell") == "empower" and empower_ready)
         ]
         if junk:
@@ -1378,9 +1418,14 @@ async def _read_hand(handler) -> list[tuple[object, dict]]:
                 keep = keep or bool(await getattr(card, check)())
             except Exception:
                 keep = True  # unread: do not throw it away
+        try:
+            enchanted = bool(await card.is_enchanted())
+        except Exception:
+            enchanted = False
         info = {
             "name": name,
             "spell": combo_spell(name),
+            "enchanted": enchanted,
             "castable": castable,
             "keep": keep,
             "drain": is_death_heal(name),
@@ -1468,7 +1513,8 @@ async def _cast_on_self(handler, card) -> None:
 
 
 async def _cast_combo(handler, done: list[str], heal: bool = False, memo: dict | None = None) -> str:
-    """Empower on the wizard, then Scarecrow; dig for Scarecrow by discarding.
+    """Colossal on Ship of Fools and cast it; then Empower on the wizard and
+    Scarecrow, digging for Scarecrow by discarding.
 
     'flee:mana' or 'flee:health' instead when passing on would end in a
     defeat (flee_reason); the caller flees. `memo` carries the dry-round count.
@@ -1484,7 +1530,13 @@ async def _cast_combo(handler, done: list[str], heal: bool = False, memo: dict |
     if vitals:
         last_vitals.clear()
         last_vitals.update(vitals)
-    reason = flee_reason(infos, vitals, memo["dry"])
+    held = "ship" not in done and any(i["spell"] == "ship" for i in infos)
+    ship_ready = held and any(i["spell"] == "ship" and i["castable"] for i in infos)
+    memo["ship_wait"] = memo.get("ship_wait", 0) + 1 if held and not ship_ready else 0
+    if memo["ship_wait"] > SHIP_WAIT:
+        logger.info(f"farm: Ship of Fools uncastable {SHIP_WAIT} rounds; Empower, Scarecrow instead")
+        done.append("ship")
+    reason = "" if ship_ready else flee_reason(infos, vitals, memo["dry"])
     if reason:
         shown = ", ".join(f"{i['name']}{'' if i['castable'] else ' (not castable)'}" for i in infos)
         logger.warning(f"farm: out of {reason} ({vitals_text(vitals)}); hand: {shown or 'nothing'}")
@@ -1497,10 +1549,12 @@ async def _cast_combo(handler, done: list[str], heal: bool = False, memo: dict |
             return drained
         logger.info("farm: health is low and no death drain is in hand")
         action = plan_round(infos, done, False)
+    if action[0] == "enchant":
+        return await _cast_ship(handler, hand, action, done, vitals)
     if action[0] == "cast":
         card, info = hand[action[1]]
         step = info["spell"]
-        if step == "scarecrow":
+        if step in ("scarecrow", "ship"):
             await card.cast(None)
         else:
             await _cast_on_self(handler, card)
@@ -1539,6 +1593,28 @@ async def _cast_combo(handler, done: list[str], heal: bool = False, memo: dict |
         vitals=vitals,
     )
     return "pass"
+
+
+async def _cast_ship(handler, hand, action, done: list[str], vitals: dict) -> str:
+    """Colossal onto Ship of Fools, then the enchanted ship at once (all enemies)."""
+    colossal, ship = hand[action[1]][0], hand[action[2]][0]
+    await colossal.cast(ship)
+    logger.info(f"farm: Colossal on Ship of Fools ({vitals_text(vitals)})")
+    blackbox.event("cast", spell="colossal", on="ship", vitals=vitals)
+    await asyncio.sleep(0.4)
+    fresh = await _read_hand(handler)
+    ships = [(c, i) for c, i in fresh if i["spell"] == "ship" and i["castable"]]
+    ships.sort(key=lambda pair: not pair[1]["enchanted"])  # the enchanted one first
+    if not ships:
+        logger.info("farm: Ship of Fools is gone from the hand after Colossal; passing")
+        await handler.pass_button()
+        return "pass"
+    card, info = ships[0]
+    await card.cast(None)
+    done.append("ship")
+    logger.info(f"farm: casting Ship of Fools (enchanted: {info['enchanted']})")
+    blackbox.event("cast", spell="ship", enchanted=info["enchanted"], vitals=vitals)
+    return "ship"
 
 
 async def _card_name(card) -> str:
