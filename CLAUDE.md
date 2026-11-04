@@ -432,7 +432,11 @@ Catacombs) are never inferred (player, 10-27: all three Arc 1 ones done).
 The page server restarts itself when its own code changes (`/version`, a
 hash of spiral_web.py and spiral.py), and `--ensure` stops an older one on
 the port: on 10-27 a server left running from before "Mark finished"
-served the new page with the old code (the button got 501, marks ignored). Lists:
+served the new page with the old code (the button got 501, marks ignored). Ten story names are in two worlds (11-03: "Mission Impossible", Zafaria
+#106 and Mirage #61; the first list read took it, so a wizard 70% into
+Zafaria showed 53% of Mirage and every world before it done). `Lookup` keeps
+all of them; `find` prefers the zone's world, then reached worlds (furthest
+first), then story order (`spiral.prefer_worlds`). Lists:
 `docs/quests/<World>.txt` (Spiral Tracker's copy-paste format, restored
 from before 10-05). First live run should check: names resolve (the
 `quest_book` events list them), and the mainline flag is set on story quests.

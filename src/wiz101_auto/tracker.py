@@ -106,7 +106,7 @@ async def track_loop(client, controller, task: dict) -> None:
             if quests is not None:
                 last["error"] = ""
                 main = [q["name"] for q in quests if q["main"]]
-                for name in progress.see(main, now):
+                for name in progress.see(main, now, world_of_zone(zone)):
                     logger.success(f"tracker: story quest {name!r}")
                     blackbox.event("story_quest", quest=name)
                 if main != last["main"]:

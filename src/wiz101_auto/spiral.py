@@ -153,21 +153,32 @@ def load_lists(docs: Path) -> dict:
 
 
 class Lookup:
-    """Quest name -> (world, ListedQuest), exact first, then a close spelling."""
+    """Quest name -> (world, ListedQuest), exact first, then a close spelling.
+
+    One name can be a story quest in two worlds (11-03: "Mission Impossible" is
+    Zafaria #106 and Mirage #61, and the first list read, Mirage, took it, so a
+    wizard 70% through Zafaria showed 53% of Mirage). Every world is kept; `find`
+    picks the `prefer` world (the one the wizard stands in) if it is one of them,
+    else the earliest in story order.
+    """
 
     def __init__(self, lists: dict):
         self.by_norm: dict = {}
         for world, listed in lists.items():
             for q in listed:
-                self.by_norm.setdefault(norm(q.name), (world, q))
+                hits = self.by_norm.setdefault(norm(q.name), [])
+                if all(w != world for w, _q in hits):
+                    hits.append((world, q))
+        for hits in self.by_norm.values():
+            hits.sort(key=lambda hit: _story_order(hit[0]))
         self._fuzzy: dict = {}
 
-    def find(self, name: str):
+    def candidates(self, name: str) -> list:
         key = norm(name)
         if key in self.by_norm:
             return self.by_norm[key]
         if key not in self._fuzzy:
-            hit = None
+            hit: list = []
             if len(key) >= 6:
                 for k, v in self.by_norm.items():
                     if abs(len(k) - len(key)) <= 3 and SequenceMatcher(None, k, key).ratio() >= 0.9:
@@ -175,6 +186,31 @@ class Lookup:
                         break
             self._fuzzy[key] = hit
         return self._fuzzy[key]
+
+    def find(self, name: str, prefer=()):
+        hits = self.candidates(name)
+        if not hits:
+            return None
+        for world in (prefer,) if isinstance(prefer, str) else prefer:
+            for hit in hits:
+                if world and hit[0] == world:
+                    return hit
+        return hits[0]
+
+
+def prefer_worlds(here: str, reached: dict) -> tuple:
+    """Which world a shared quest name belongs to: where the wizard stands, then
+    the worlds already reached, furthest in the story first."""
+    return (here, *sorted(reached, key=_story_order, reverse=True))
+
+
+def _story_order(world: str) -> int:
+    """Story worlds in order, then the optional ones after their arc's last world."""
+    if world in WORLDS:
+        return WORLDS.index(world) * 2
+    arc = SIDE_WORLDS.get(world)
+    members = next((names for a, names in ARCS if a == arc), ())
+    return WORLDS.index(members[-1]) * 2 + 1 if members else 10_000
 
 
 _cache: dict = {}
@@ -232,11 +268,12 @@ class Progress:
         self.events: list = list(data.get("events") or [])
         self._dirty = False
 
-    def see(self, main_quests: list, now: float) -> list:
-        """The main-story quests in the book now. Returns the ones that moved a world on."""
+    def see(self, main_quests: list, now: float, world: str = "") -> list:
+        """The main-story quests in the book now (`world`: the wizard's, which
+        settles a name two worlds share). Returns the ones that moved a world on."""
         moved = []
         for name in main_quests:
-            hit = self.lookup.find(name)
+            hit = self.lookup.find(name, prefer_worlds(world, self.reached))
             if not hit:
                 if name not in self.unlisted:
                     self.unlisted[name] = now
@@ -285,7 +322,7 @@ def build(docs: Path, state: Path, now: float | None = None) -> dict:
         here_index = max(here_index, WORLDS.index(live_world))
 
     tracked = (live.get("tracked") if live else "") or ""
-    tracked_hit = lookup.find(tracked) if tracked else None
+    tracked_hit = lookup.find(tracked, prefer_worlds(live_world, reached)) if tracked else None
     # The world being played: the tracked story quest's, else the latest
     # story quest's, else where the wizard stands.
     latest = max(reached.items(), key=lambda kv: float(kv[1].get("t") or 0), default=None)

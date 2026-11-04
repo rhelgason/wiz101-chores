@@ -213,3 +213,24 @@ def test_marking_an_unknown_world_is_refused(tmp_path):
 
     with pytest.raises(ValueError):
         spiral.set_world_done(tmp_path, "Atlantis", True)
+
+
+def test_a_name_two_worlds_share_goes_to_the_right_one(tmp_path):
+    # 11-03: "Mission Impossible" is Zafaria #106 and Mirage #61; Mirage took it.
+    z = parse_quest_list("A (2 quests)\n1.\nUnicorn Way\n2.\nMission Impossible\n")
+    m = parse_quest_list("B (2 quests)\n1.\nSomewhere\n2.\nMission Impossible\n")
+    w = parse_quest_list("C (1 quest)\n1.\nUnicorn Way\n")
+    look = Lookup({"Mirage": m, "Zafaria": z, "Wizard City": w})
+    assert look.find("Mission Impossible")[0] == "Zafaria"  # the earlier world, not the first list read
+    assert look.find("Mission Impossible", "Mirage")[0] == "Mirage"  # standing in Mirage
+    assert look.find("Unicorn Way")[0] == "Wizard City"
+    p = Progress(tmp_path / "progress.json", look)
+    p.reached = {"Wizard City": {"index": 1}, "Zafaria": {"index": 1}}
+    assert p.see(["Mission Impossible"], 1.0, "") == ["Mission Impossible"]
+    assert set(p.reached) == {"Wizard City", "Zafaria"} and p.reached["Zafaria"]["index"] == 2
+    assert look.find("Unicorn Way", spiral.prefer_worlds("", p.reached))[0] == "Zafaria"
+
+
+def test_the_repos_shared_names_include_mission_impossible():
+    _lists, look = spiral.lists_and_lookup(REPO_DOCS)
+    assert [w for w, _q in look.candidates("Mission Impossible")] == ["Zafaria", "Mirage"]
