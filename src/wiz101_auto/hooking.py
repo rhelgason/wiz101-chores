@@ -34,13 +34,13 @@ from loguru import logger
 from . import blackbox
 
 SESSION = Path("state") / "hook_session.json"
-CAVE_SIZE = 4100  # HookHandler.AUTOBOT_SIZE
+CAVE_SIZE = 4100  # HookHandler.AUTOBOT_SIZE (the hooks use ~300-430 of it)
 # (record name, wizwalker hook class, _base_addrs key, the hook's export attribute)
 DATA_HOOKS = (
     ("player", "PlayerHook", "player_struct", "player_struct"),
     ("player_stat", "PlayerStatHook", "player_stat_struct", "stat_addr"),
-    ("client", "ClientHook", "current_client", "current_client_addr"),
-    ("root_window", "RootWindowHook", "current_root_window", "current_root_window_addr"),
+    ("client", "AnyBuildClientHook", "current_client", "current_client_addr"),
+    ("root_window", "AnyBuildRootWindowHook", "current_root_window", "current_root_window_addr"),
     ("render_context", "RenderContextHook", "current_render_context", "current_render_context_addr"),
 )
 DANCE = ("dance", "DanceGameMovesHook", "dance_game_moves", "dance_game_moves")
@@ -137,6 +137,10 @@ def _hook_class(name: str):
         from .petdance import DanceGameMovesHook
 
         return DanceGameMovesHook
+    if name.startswith("AnyBuild"):
+        from . import anybuild
+
+        return getattr(anybuild, name)
     from wizwalker.memory import hooks
 
     return getattr(hooks, name)
@@ -221,6 +225,7 @@ class Hooks:
             "original": bytes(self.handler._original_autobot_bytes or b"").hex(),
             "used": int(self.handler._autobot_pos),
             "size": CAVE_SIZE,
+            "kind": getattr(self.handler, "_cave_kind", "game"),
         }
         save_session(self.session)
 
@@ -291,6 +296,16 @@ class Hooks:
         fresh scan would fail. One that still holds the game's bytes is left
         for the scan.
         """
+        if cave.get("kind") == "alloc" and cave.get("address"):
+            # Our own allocation in this game: never freed, so it is still there
+            # unless the process is gone (then same_game would have said no).
+            if await _bytes_at(self.handler, int(cave["address"]), 16) is None:
+                return False
+            self.handler._autobot_address = int(cave["address"])
+            self.handler._original_autobot_bytes = b""
+            self.handler._autobot_pos = int(cave.get("used") or 0)
+            self.handler._cave_kind = "alloc"
+            return True
         if not cave.get("address") or not cave.get("original"):
             return False
         original = bytes.fromhex(cave["original"])
@@ -302,17 +317,26 @@ class Hooks:
         return True
 
     async def _prepare_cave(self) -> None:
-        """WizWalker's _prepare_autobot, with the cave recorded before it is zeroed."""
+        """Scratch memory for the hook bodies: a fresh allocation beside the game module.
+
+        11-12: the update removed the game function WizWalker zeroed and used as
+        its cave (AUTOBOT_PATTERN). An allocation writes no game code at all and
+        its protection never changes (the 10-07 crash was a cave page whose
+        protection did). It is never freed: the hooks stay in the game between
+        runs and jump into it.
+        """
+        from .rehook import _allocate_near_module
+
         handler = self.handler
-        await handler._get_autobot_address()
-        handler._original_autobot_bytes = await handler.read_bytes(
-            handler._autobot_address, len(handler.AUTOBOT_PATTERN)
-        )
+        address = _allocate_near_module(handler, CAVE_SIZE)
+        if not address:
+            raise OSError("could not allocate hook memory beside the game")
+        handler._autobot_address = int(address)
+        handler._original_autobot_bytes = b""
         handler._autobot_pos = 0
+        handler._cave_kind = "alloc"
         self._save()
-        blackbox.event("hook_install", hook="cave", address=hex(handler._autobot_address))
-        with blackbox.guard.allow("hook cave"):
-            await handler.write_bytes(handler._autobot_address, b"\x00" * handler.AUTOBOT_SIZE)
+        blackbox.event("hook_install", hook="cave", address=hex(handler._autobot_address), kind="alloc")
 
     async def _install(self, name: str, cls_name: str, base_key: str, export_attr: str) -> None:
         """MemoryHook.hook, step by step, so the record is on disk before any write.

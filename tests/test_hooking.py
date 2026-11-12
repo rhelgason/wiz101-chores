@@ -92,6 +92,10 @@ def fake_wizwalker(monkeypatch):
     monkeypatch.setitem(sys.modules, "wizwalker", types.ModuleType("wizwalker"))
     monkeypatch.setitem(sys.modules, "wizwalker.memory", memory_mod)
     monkeypatch.setitem(sys.modules, "wizwalker.memory.hooks", hooks_mod)
+    monkeypatch.delitem(sys.modules, "wiz101_auto.anybuild", raising=False)  # subclasses these fakes
+    import wiz101_auto
+
+    monkeypatch.delattr(wiz101_auto, "anybuild", raising=False)
     return hooks_mod
 
 
@@ -261,3 +265,28 @@ def test_a_half_removed_mouse_hook_is_put_back_jump_first(tmp_path, monkeypatch)
     hooks.session = {"mouse_originals": {"regions": regions}}
     asyncio.run(hooks._repair_mouse())
     assert handler.writes == [(0x7B000000, bytes.fromhex("4883ec28")), (0x141500000, b"\x00")]
+
+
+def test_a_new_cave_is_allocated_and_an_allocated_cave_is_reused(tmp_path, monkeypatch, fake_wizwalker):
+    """11-12: the game function WizWalker used as its cave is gone; the cave is our own memory."""
+    from wiz101_auto import rehook
+
+    monkeypatch.setattr(hooking, "SESSION", tmp_path / "hook_session.json")
+    alloc = 0x13FFF0000
+    asked = []
+    monkeypatch.setattr(rehook, "_allocate_near_module", lambda h, size: asked.append(size) or alloc)
+    handler = Handler({alloc: b"\0" * 4100})
+    hooks = hooking.Hooks(types.SimpleNamespace(hook_handler=handler, process_id=444))
+    hooks.session = {"pid": 444, "module_base": 0x140000000, "hooks": {}}
+    asyncio.run(hooks._prepare_cave())
+    assert asked == [hooking.CAVE_SIZE] and handler.writes == []  # no game code written for it
+    saved = hooking.load_session(hooking.SESSION)["cave"]
+    assert saved["kind"] == "alloc" and saved["address"] == alloc
+
+    again = Handler({alloc: b"\x50" * 300 + b"\0" * 3800})
+    hooks2 = hooking.Hooks(types.SimpleNamespace(hook_handler=again, process_id=444))
+    assert asyncio.run(hooks2._reuse_cave(dict(saved, used=300))) is True
+    assert again._autobot_address == alloc and again._autobot_pos == 300
+    gone = Handler({})
+    hooks3 = hooking.Hooks(types.SimpleNamespace(hook_handler=gone, process_id=444))
+    assert asyncio.run(hooks3._reuse_cave(saved)) is False

@@ -73,6 +73,24 @@ How the code enforces it:
   spots that are ours (adopted) or still original (installed again). Only
   bytes that are neither → refuse and ask for a game restart. Game-module
   hook bytes are never "repaired" by rewriting.
+- Game update 11-12 (a new world; `WizardGraphicalClient.exe` rebuilt 16:56):
+  WizWalker's cave function (`AUTOBOT_PATTERN`) is gone, ClientHook's pattern
+  moved one stack slot, the dance hook's scratch register went rbx -> rdi, and
+  RootWindowHook's pattern still matched but its base register went r13 ->
+  r15 (WizWalker's hand-copied body would have replayed the wrong load).
+  Now: the cave is our own allocation beside the module
+  (`rehook._allocate_near_module`, `kind: alloc` in the record, adopted like
+  the rest, never freed: the hooks keep jumping into it); `hookbytes.py`
+  builds the client, root window and dance bodies from the bytes at the spot
+  and refuses a spot of the wrong shape (`HookShapeError`); `anybuild.py`
+  holds the subclasses. `tests/test_hookbytes.py` checks the installed exe.
+  `gamebuild.py` records the build (PE link time, size, mtime) the hooks last
+  went in on, in `state/game_build.json`, and a missing pattern on a new build
+  says "Wizard101 was updated". Still broken by 11-12, unused by pet, seeds and
+  tracker: the movement pattern (so `jump.PositionHook`, gather's opt-in jumps)
+  and WizWalker's camera/freecam/account offset patterns. Unverified live
+  (offline from the exe only): every hook on the new build, the Player hook's
+  `[rax+0x474] == 8` check, and object offsets WizWalker reads.
 - The mouse hook's original bytes (GetCursorPos, SetCursorPos, the
   GetClassInfoExA cave, two game bools) are snapshotted before it goes in;
   a run that died with it half in is put back from that snapshot.

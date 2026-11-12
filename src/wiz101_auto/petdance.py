@@ -36,6 +36,7 @@ except ImportError:  # the dance hook only exists on Windows, next to the game
 
 from . import blackbox, ui
 from .dayplan import DANCE_COST
+from .hookbytes import DANCE_PATTERN, dance_body
 from .world import is_free, wait_for_loading
 
 PET_REQUEST = Path("state") / "pet.request"  # `pet`: games to play ("0": until the energy runs out)
@@ -55,21 +56,21 @@ WM_KEYDOWN, WM_KEYUP = 0x100, 0x101
 
 
 class DanceGameMovesHook(SimpleHook):
-    """Copies the dance game's move string pointer to an export (peechez, via Deimos)."""
+    """Copies the dance game's move string pointer to an export (peechez, via Deimos).
 
-    pattern = rb"\x48\x8B\xD8\x48\x39\x70\x10\x76.\x8B\xC6"
+    11-12: the update changed `mov rbx, rax` to `mov rdi, rax` here; the pattern
+    takes either and the body keeps rax in whichever register the game uses
+    (hookbytes.dance_body).
+    """
+
+    pattern = DANCE_PATTERN
     instruction_length = 7
     exports = [("dance_game_moves", 8)]
     noops = 2
 
     async def bytecode_generator(self, packed_exports):
-        return (
-            b"\x48\x8B\xD8"  # mov rbx, rax
-            b"\x48\x8B\x00"  # mov rax, [rax]
-            b"\x48\xA3" + packed_exports[0][1]  # mov [export], rax
-            + b"\x48\x8B\xC3"  # mov rax, rbx
-            b"\x48\x39\x70\x10"  # cmp [rax+10], rsi (the instruction replaced)
-        )
+        original = await self.read_bytes(self.jump_address, self.instruction_length)
+        return dance_body(original, packed_exports[0][1])
 
 
 async def activate_dance_hook(handler: HookHandler):
