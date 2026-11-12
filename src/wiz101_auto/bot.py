@@ -190,13 +190,14 @@ async def connect(handler: ClientHandler, mode: str = "seeds", jumps: bool = Fal
         # WizWalker reports a missing hook cave as RuntimeError("Pattern scan failed ...").
         if not isinstance(exc, PatternFailed) and "pattern" not in str(exc).lower():
             raise
-        blackbox.event("connect_failed", why=f"pattern not found: {exc}")
-        raise SystemExit(
-            "\nA hook spot was not found in this game. Two causes:\n"
-            "- an older version of this bot hooked this same game window and did not record it. "
-            "Quit Wizard101 completely, start it, log in, and run again (once).\n"
-            "- a game update moved the code. Then WizWalker needs an update."
-        ) from None
+        from . import gamebuild
+
+        build, good = gamebuild.fingerprint(), gamebuild.last_good()
+        blackbox.event(
+            "connect_failed", why=f"pattern not found: {exc}", build=build, last_good=good,
+            updated=gamebuild.same_build(build, good) is False,
+        )
+        raise SystemExit(gamebuild.missing_spot_message(build, good)) from None
     except TimeoutError:
         blackbox.event("connect_failed", why="hook scan timed out")
         from .rehook import SCAN_STALL
@@ -216,6 +217,10 @@ async def connect(handler: ClientHandler, mode: str = "seeds", jumps: bool = Fal
                 else "Wizard101 is not running. Start it, log in, stand in the world, then run again."
             )
         ) from None
+    from . import gamebuild
+
+    with contextlib.suppress(OSError):
+        blackbox.event("game_build", **(gamebuild.remember_good() or {}))
     _click_left_of_center(client)
     await asyncio.wait_for(
         hooks.handler._wait_for_value(hooks.handler._base_addrs["current_root_window"], None),
