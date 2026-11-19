@@ -94,6 +94,15 @@ How the code enforces it:
 - The mouse hook's original bytes (GetCursorPos, SetCursorPos, the
   GetClassInfoExA cave, two game bools) are snapshotted before it goes in;
   a run that died with it half in is put back from that snapshot.
+  No snapshot, no mouse hook; an install that raises is put back at once
+  (11-18: WizWalker's "bool two" pattern missed after it had written the
+  GetCursorPos jump; no snapshot, so the game's cursor stayed hijacked).
+  A GetCursorPos already starting with a jump nobody recorded refuses
+  (restart the game). Game update 11-18: bool two (`mov byte [r+0x190], 0`
+  in the mouse-leave handling) became `41 C6 86 ...` with `xor esi,esi`;
+  `hookbytes.mouse_leave_flag` finds it by shape (the same field's `cmp ...,
+  0; je` just before) and `mouse_in` hands it to WizWalker through its hook
+  cache (`bool_two_address`). Data hook patterns all still matched on 11-18.
 - `rehook.pid_alive` must never `os.kill(pid, 0)` in the bottle: on Windows
   that is TerminateProcess, and Wine reuses small pids (the game was pid
   444). The lock now counts only a live python.exe; `service.stop` never

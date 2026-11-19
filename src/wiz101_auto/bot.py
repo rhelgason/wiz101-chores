@@ -168,6 +168,7 @@ def _pick_client(handler: ClientHandler):
 
 
 async def connect(handler: ClientHandler, mode: str = "seeds", jumps: bool = False):
+    from .hookbytes import HookShapeError
     from .hooking import Hooks, HookStateError
 
     client = _pick_client(handler)
@@ -227,7 +228,11 @@ async def connect(handler: ClientHandler, mode: str = "seeds", jumps: bool = Fal
         timeout=HOOK_TIMEOUT,
     )
     if not hands_off:
-        await hooks.mouse_in()
+        try:
+            await hooks.mouse_in()
+        except (HookStateError, HookShapeError, PatternFailed) as exc:
+            blackbox.event("connect_failed", why=f"mouse hook: {exc}")
+            raise SystemExit(f"\nThe mouse hook could not go in: {exc}") from None
         from .relog import at_character_select, play_from_character_select, reconnect_if_asked
 
         if await reconnect_if_asked(client):

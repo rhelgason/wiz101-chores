@@ -32,6 +32,14 @@ from pathlib import Path
 from loguru import logger
 
 from . import blackbox
+from .hookbytes import (
+    MOUSE_LEAVE_BEFORE,
+    MOUSE_LEAVE_CANDIDATES,
+    MOUSE_LEAVE_IMM,
+    MOUSE_LEAVE_WIZWALKER,
+    HookShapeError,
+    mouse_leave_flag,
+)
 
 SESSION = Path("state") / "hook_session.json"
 CAVE_SIZE = 4100  # HookHandler.AUTOBOT_SIZE (the hooks use ~300-430 of it)
@@ -205,6 +213,33 @@ def _mouse_record(hook) -> dict:
         "set_cursor_pos_original": bytes(hook.set_cursor_pos[1]).hex(),
         "mouse_pos": int(hook.mouse_pos_addr),
     }
+
+
+async def mouse_leave_address(handler) -> int:
+    """The `mov byte [r+d], 0` whose immediate the mouse hook sets to 1 (hookbytes)."""
+    module = "WizardGraphicalClient.exe"
+    found = []
+    try:
+        found = await handler.pattern_scan(MOUSE_LEAVE_CANDIDATES, module=module, return_multiple=True)
+    except Exception as exc:
+        if type(exc).__name__ == "ClientClosedError":
+            raise
+    good = []
+    for address in found or ():
+        before = await handler.read_bytes(address - MOUSE_LEAVE_BEFORE, MOUSE_LEAVE_BEFORE)
+        if mouse_leave_flag(before, await handler.read_bytes(address, 16)):
+            good.append(int(address))
+    if len(good) == 1:
+        return good[0]
+    try:  # builds before 11-18: WizWalker's own pattern
+        return int(await handler.pattern_scan(MOUSE_LEAVE_WIZWALKER, module=module))
+    except Exception as exc:
+        if type(exc).__name__ == "ClientClosedError":
+            raise
+        raise HookShapeError(
+            f"mouse hook: the game's mouse-leave flag was not found ({len(good)} spots of its shape). "
+            "A game update moved it; the bot needs a new pattern."
+        ) from exc
 
 
 class Hooks:
@@ -387,11 +422,14 @@ class Hooks:
         ):
             address = await handler.get_address_from_symbol("user32.dll", symbol)
             regions.append([symbol, int(address), (await handler.read_bytes(address, size)).hex()])
+        if regions[0][2].startswith("e9"):
+            raise HookStateError(
+                "GetCursorPos already jumps somewhere this bot did not record (a mouse hook left "
+                "in by a run that failed). Quit Wizard101 completely, start it, log in, and run again."
+            )
         one = await handler.pattern_scan(rb"\x00\xFF\x50\x18\x66\xC7", module="WizardGraphicalClient.exe")
-        two = await handler.pattern_scan(
-            rb"\xC6\x86...\x00\x00\x33\xFF\x89", module="WizardGraphicalClient.exe"
-        )
-        for label, address in (("mouse bool one", one), ("mouse bool two", two + 6)):
+        two = await mouse_leave_address(handler)
+        for label, address in (("mouse bool one", one), ("mouse bool two", two + MOUSE_LEAVE_IMM)):
             regions.append([label, int(address), (await handler.read_bytes(address, 1)).hex()])
         return {"regions": regions}
 
@@ -422,16 +460,29 @@ class Hooks:
             await mouse.__aenter__()
             return
         if "mouse_originals" not in self.session:
-            try:
-                self.session["mouse_originals"] = await self._mouse_originals()
-                self._save()
-            except Exception as exc:
-                if type(exc).__name__ == "ClientClosedError":
-                    raise
-                logger.warning(f"hooks: could not snapshot the mouse hook's spots first ({exc})")
+            # No snapshot, no hook: without the original bytes a failed install
+            # cannot be put back (11-18: it left GetCursorPos jumping, the game's
+            # cursor stuck, and nothing to undo it with).
+            self.session["mouse_originals"] = await self._mouse_originals()
+            self._save()
+        leave = next(r[1] for r in self.session["mouse_originals"]["regions"] if r[0] == "mouse bool two")
+        # WizWalker looks for this flag with a pattern the 11-18 build no longer
+        # matches; its hook takes the address from its cache when one is there.
+        self.handler._hook_cache.setdefault(MouselessCursorMoveHook, {})["bool_two_address"] = (
+            leave - MOUSE_LEAVE_IMM
+        )
         blackbox.event("hook_install", hook="mouse")
-        with blackbox.guard.allow("mouse hook"):
-            await mouse.__aenter__()
+        try:
+            with blackbox.guard.allow("mouse hook"):
+                await mouse.__aenter__()
+        except Exception as exc:
+            if type(exc).__name__ == "ClientClosedError":
+                raise
+            logger.error(f"hooks: the mouse hook failed half way in ({exc}); putting the game's bytes back")
+            blackbox.event("mouse_install_failed", error=str(exc)[:200])
+            self.handler._active_hooks.pop(MouselessCursorMoveHook, None)
+            await self._repair_mouse()
+            raise
         hook = self.handler._get_hook_by_type(MouselessCursorMoveHook)
         if hook is not None:
             self.session["mouse"] = _mouse_record(hook)

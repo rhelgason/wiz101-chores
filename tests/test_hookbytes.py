@@ -9,9 +9,13 @@ import pytest
 from wiz101_auto.hookbytes import (
     CLIENT_PATTERN,
     DANCE_PATTERN,
+    MOUSE_LEAVE_BEFORE,
+    MOUSE_LEAVE_CANDIDATES,
+    MOUSE_LEAVE_IMM,
     HookShapeError,
     client_body,
     dance_body,
+    mouse_leave_flag,
     root_window_body,
 )
 
@@ -57,6 +61,37 @@ def test_unexpected_instructions_are_refused():
         dance_body(bytes.fromhex("488bf848397018"), EXPORT)
 
 
+# 11-18 build, 0x141895f42: cmp byte [r14+0x190], 0; je; mov byte [r14+0x190], 0; xor esi, esi; mov
+NEW_LEAVE = bytes.fromhex(
+    "aa bb 41 80 be 90 01 00 00 00 0f 84 c6 07 00 00 41 c6 86 90 01 00 00 00 33 f6 89 b5"
+)
+# the same with no REX (an rsi base, as WizWalker's pattern expects)
+OLD_LEAVE = bytes.fromhex(
+    "aa bb cc 80 be 90 01 00 00 00 0f 84 c6 07 00 00 c6 86 90 01 00 00 00 33 ff 89 b5 70"
+)
+
+
+def split(code):
+    at = code.index(b"\xc6\x86")
+    return code[at - MOUSE_LEAVE_BEFORE : at], code[at:]
+
+
+def test_the_mouse_leave_flag_is_the_write_guarded_by_the_same_compare():
+    assert mouse_leave_flag(*split(NEW_LEAVE))
+    assert mouse_leave_flag(*split(OLD_LEAVE))
+    assert split(NEW_LEAVE)[1][MOUSE_LEAVE_IMM] == 0
+    other_field = NEW_LEAVE.replace(bytes.fromhex("c6 86 90 01"), bytes.fromhex("c6 86 98 01"))
+    assert not mouse_leave_flag(*split(other_field))
+    other_reg = NEW_LEAVE.replace(bytes.fromhex("80 be 90"), bytes.fromhex("80 bf 90"))
+    assert not mouse_leave_flag(*split(other_reg))
+    rex_mismatch = NEW_LEAVE.replace(bytes.fromhex("bb 41 80"), bytes.fromhex("bb cc 80"))
+    assert not mouse_leave_flag(*split(rex_mismatch))
+    no_je = NEW_LEAVE.replace(bytes.fromhex("0f 84"), bytes.fromhex("0f 85"))
+    assert not mouse_leave_flag(*split(no_je))
+    sets_one = NEW_LEAVE.replace(bytes.fromhex("01 00 00 00 33"), bytes.fromhex("01 00 00 01 33"))
+    assert not mouse_leave_flag(*split(sets_one))
+
+
 GAME_EXE = Path(os.path.expanduser(
     "~/Library/Application Support/Wizard101/Bottles/wizard101/drive_c/ProgramData/"
     "KingsIsle Entertainment/Wizard101/Bin/WizardGraphicalClient.exe"
@@ -73,3 +108,10 @@ def test_the_installed_game_has_one_spot_each_of_the_right_shape():
     client_body(data[client[0] + 1 : client[0] + 8], EXPORT)
     dance_body(data[dance[0] : dance[0] + 7], EXPORT)
     root_window_body(data[root[0] : root[0] + 7], EXPORT)
+    leave = [
+        m.start()
+        for m in re.finditer(MOUSE_LEAVE_CANDIDATES, data, re.S)
+        if mouse_leave_flag(data[m.start() - MOUSE_LEAVE_BEFORE : m.start()], data[m.start() : m.start() + 9])
+    ]
+    assert len(leave) == 1 and data[leave[0] + MOUSE_LEAVE_IMM] == 0
+    assert len(re.findall(rb"\x00\xFF\x50\x18\x66\xC7", data, re.S)) == 1  # WizWalker's bool one

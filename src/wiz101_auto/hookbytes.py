@@ -96,3 +96,38 @@ def dance_body(original: bytes, export: bytes) -> bytes:
         + bytes([0x48, 0x8B, 0xC0 | keep])  # mov rax, R
         + original[3:]  # cmp [rax+0x10], rsi
     )
+
+
+# Mouse hook, "bool two". WizWalker's mouse hook also turns one flag write in the
+# game into a constant: `mov byte [base + disp32], 0` (the game's "the mouse left
+# the window" handling, before it posts WM_MOUSELEAVE 0x2A3) gets its immediate
+# set to 1, so the game keeps believing the cursor is in the window. WizWalker
+# finds it with `C6 86 ...00 00 33 FF 89` and writes 1 at match + 6.
+# 11-18 build: the same code with the registers renamed,
+# `41 C6 86 90 01 00 00 00  33 F6 89` (rsi -> r14 base, edi -> esi zeroed): a REX
+# byte in front and `33 F6`, so WizWalker's pattern finds nothing.
+MOUSE_LEAVE_WIZWALKER = rb"\xC6\x86...\x00\x00\x33\xFF\x89"
+# Candidates: `mov byte [r + disp32], 0` then `xor r32, r32` then a `mov`. Eleven
+# of them in the 11-18 build; mouse_leave_flag picks the one guarded by the
+# matching `cmp byte [same r + same disp], 0; je`.
+MOUSE_LEAVE_CANDIDATES = rb"\xC6[\x80-\x83\x85-\x87]...\x00\x00\x33[\xC0-\xFF]\x89"
+MOUSE_LEAVE_BEFORE = 16  # bytes read before a candidate for the check
+MOUSE_LEAVE_IMM = 6  # the immediate sits 6 bytes after the C6 (both builds)
+
+
+def mouse_leave_flag(before: bytes, at: bytes) -> bool:
+    """Is the candidate at `at` (starting at its C6 byte, `before` = the bytes in
+    front of it) `[rex] cmp byte [r+d], 0; je rel32; [rex] mov byte [r+d], 0`?"""
+    if len(at) < 7 or at[0] != 0xC6 or at[1] >> 6 != 2 or (at[1] >> 3) & 7 or at[1] & 7 == RSP:
+        return False
+    if at[MOUSE_LEAVE_IMM] != 0:
+        return False
+    rex = before[-1] if before and 0x40 <= before[-1] <= 0x4F else None
+    tail = before[:-1] if rex is not None else before
+    if len(tail) < 14 or tail[-6:-4] != b"\x0F\x84":
+        return False
+    cmp = tail[-13:-6]  # 80 /7 modrm disp32 imm8
+    if cmp[0] != 0x80 or cmp[1] != (0xB8 | (at[1] & 7)) or cmp[2:6] != at[2:6] or cmp[6] != 0:
+        return False
+    cmp_rex = tail[-14] if 0x40 <= tail[-14] <= 0x4F else None
+    return cmp_rex == rex

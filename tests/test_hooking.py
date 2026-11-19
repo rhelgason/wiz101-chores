@@ -290,3 +290,116 @@ def test_a_new_cave_is_allocated_and_an_allocated_cave_is_reused(tmp_path, monke
     gone = Handler({})
     hooks3 = hooking.Hooks(types.SimpleNamespace(hook_handler=gone, process_id=444))
     assert asyncio.run(hooks3._reuse_cave(saved)) is False
+
+
+class Scanner(Handler):
+    def __init__(self, cells, hits):
+        super().__init__(cells)
+        self.hits = hits
+        self._hook_cache = {}
+
+    async def pattern_scan(self, pattern, *, module=None, return_multiple=False):
+        found = self.hits.get(pattern)
+        if not found:
+            raise RuntimeError("PatternFailed")
+        return found if return_multiple else found[0]
+
+    async def write_bytes(self, address, data):
+        self.writes.append((address, data))
+        for start, cell in self.cells.items():
+            if start <= address < start + len(cell):
+                at = address - start
+                self.cells[start] = cell[:at] + data + cell[at + len(data) :]
+
+
+LEAVE_AT = 0x141895F51
+LEAVE_CODE = bytes.fromhex(
+    "aa bb 41 80 be 90 01 00 00 00 0f 84 c6 07 00 00 41 c6 86 90 01 00 00 00 33 f6 89 b5"
+)
+
+
+def test_the_mouse_leave_flag_is_found_by_shape_when_wizwalkers_pattern_fails():
+    from wiz101_auto import hookbytes
+
+    start = LEAVE_AT - 17
+    decoy = 0x141000000
+    handler = Scanner(
+        {
+            start: LEAVE_CODE + b"\0" * 16,
+            decoy - 16: b"\0" * 16 + bytes.fromhex("c6 86 10 00 00 00 00 33 c0 89") + b"\0" * 6,
+        },
+        {hookbytes.MOUSE_LEAVE_CANDIDATES: [decoy, LEAVE_AT]},
+    )
+    assert asyncio.run(hooking.mouse_leave_address(handler)) == LEAVE_AT
+    handler.hits[hookbytes.MOUSE_LEAVE_CANDIDATES] = [decoy]
+    with pytest.raises(hookbytes.HookShapeError):
+        asyncio.run(hooking.mouse_leave_address(handler))
+
+
+def mouse_game():
+    from wiz101_auto import hookbytes
+
+    cells = {
+        0x7B000000: bytes.fromhex("488da42400000000"),  # GetCursorPos
+        0x7B000100: bytes.fromhex("4883ec284889"),  # SetCursorPos
+        0x7B001000: b"\x48\x89" + b"\0" * 1198,  # GetClassInfoExA
+        0x141500000: b"\x00\xff\x50\x18\x66\xc7",
+        LEAVE_AT - 17: LEAVE_CODE + b"\0" * 16,
+    }
+    handler = Scanner(cells, {
+        hookbytes.MOUSE_LEAVE_CANDIDATES: [LEAVE_AT],
+        rb"\x00\xFF\x50\x18\x66\xC7": [0x141500000],
+    })
+    symbols = {"GetCursorPos": 0x7B000000, "SetCursorPos": 0x7B000100, "GetClassInfoExA": 0x7B001000}
+
+    async def get_address_from_symbol(module, name):
+        return symbols[name]
+
+    handler.get_address_from_symbol = get_address_from_symbol
+    return handler
+
+
+def test_a_mouse_hook_that_fails_half_way_in_is_put_back(tmp_path, monkeypatch, fake_wizwalker):
+    """11-18: the hook wrote its cave and the GetCursorPos jump, then failed on the flag pattern."""
+    hooks_mod = fake_wizwalker
+    hooks_mod.User32GetClassInfoBaseHook = type("User32GetClassInfoBaseHook", (), {"AUTOBOT_SIZE": 1200})
+    monkeypatch.setattr(hooking, "SESSION", tmp_path / "hook_session.json")
+    handler = mouse_game()
+    handler._check_if_hook_active = lambda cls: False
+    seen = {}
+
+    class Mouse:
+        async def __aenter__(self):
+            seen.update(handler._hook_cache[hooks_mod.MouselessCursorMoveHook])
+            await handler.write_bytes(0x7B001000, b"\x50" * 40)
+            await handler.write_bytes(0x7B000000, b"\xe9\x00\x10\x00\x00")
+            raise RuntimeError("Pattern failed")
+
+    client = types.SimpleNamespace(hook_handler=handler, process_id=444, mouse_handler=Mouse())
+    hooks = hooking.Hooks(client)
+    hooks.session = {"pid": 444, "module_base": 0x140000000, "hooks": {}}
+    with pytest.raises(RuntimeError, match="Pattern failed"):
+        asyncio.run(hooks.mouse_in())
+    assert seen["bool_two_address"] == LEAVE_AT  # WizWalker adds 6 to reach the immediate
+    assert handler.cells[0x7B000000].startswith(bytes.fromhex("488da42400"))
+    assert handler.cells[0x7B001000][:2] == b"\x48\x89" and handler.cells[0x7B001000][2:40] == b"\0" * 38
+    assert "mouse" not in hooks.session
+
+
+def test_no_mouse_hook_over_a_jump_nobody_recorded(tmp_path, monkeypatch, fake_wizwalker):
+    fake_wizwalker.User32GetClassInfoBaseHook = type("User32GetClassInfoBaseHook", (), {"AUTOBOT_SIZE": 1200})
+    monkeypatch.setattr(hooking, "SESSION", tmp_path / "hook_session.json")
+    handler = mouse_game()
+    handler.cells[0x7B000000] = b"\xe9\x00\x10\x00\x00\x00\x00\x00"
+    handler._check_if_hook_active = lambda cls: False
+    entered = []
+
+    class Mouse:
+        async def __aenter__(self):
+            entered.append(1)
+
+    hooks = hooking.Hooks(types.SimpleNamespace(hook_handler=handler, process_id=444, mouse_handler=Mouse()))
+    hooks.session = {"pid": 444, "module_base": 0x140000000, "hooks": {}}
+    with pytest.raises(hooking.HookStateError):
+        asyncio.run(hooks.mouse_in())
+    assert entered == [] and handler.writes == []
